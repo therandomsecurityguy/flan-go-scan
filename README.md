@@ -1,6 +1,6 @@
 # flan-go-scan
 
-iA modular, extensible network vulnerability scanner in Go.
+A modular, extensible network vulnerability scanner in Go. The is an update to the deprecated Flan Scan project: https://github.com/cloudflare/flan
 
 ## Features
 
