@@ -1,0 +1,11 @@
+scan:
+  timeout: 2s
+  ports: "22,80,443,53"
+  rate_limit: 5
+dns:
+  ttl: 5m
+output:
+  format: json
+  directory: ./reports
+checkpoint:
+  file: scan-state.json
