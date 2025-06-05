@@ -22,6 +22,25 @@ A modular, extensible network vulnerability scanner in Go. The is an update to t
 go build -o flan-go-scan ./cmd/flan-go-scan
 ./flan-go-scan -ips=ips.txt
 ```
+## Common Run Options
+
+Specify a different IPs file:
+`./flan-go-scan -ips=mytargets.txt`
+
+Set port range:
+`./flan-go-scan -start=20 -end=100`
+
+Set timeout (milliseconds):
+`./flan-go-scan -timeout=2000`
+
+Set concurrency (number of parallel scans):
+`./flan-go-scan -concurrency=200`
+
+Output as JSON:
+`./flan-go-scan -format=json > report.json`
+
+Output as CSV:
+`./flan-go-scan -format=csv > report.csv`
 
 ## License
 
