@@ -1,4 +1,4 @@
-![Go-Gopher-Flan](https://github.com/user-attachments/assets/a32cd803-9718-419f-9f7d-cb34b6dcd6bd)
+![Go-Gopher-Flan-small](https://github.com/user-attachments/assets/e08ec4c5-8619-4437-a043-af7ea4a035fb)
 
 # flan-go-scan
 
