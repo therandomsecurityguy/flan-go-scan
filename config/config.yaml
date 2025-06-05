@@ -1,6 +1,6 @@
 scan:
   timeout: 2s
-  ports: "22,80,443,53"
+  ports: "1-1024"
   rate_limit: 5
 dns:
   ttl: 5m
