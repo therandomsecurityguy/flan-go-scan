@@ -1,3 +1,5 @@
+![Go-Gopher-Flan](https://github.com/user-attachments/assets/a32cd803-9718-419f-9f7d-cb34b6dcd6bd)
+
 # flan-go-scan
 
 A modular, extensible network vulnerability scanner in Go. This is an update to the deprecated Flan Scan project: https://github.com/cloudflare/flan
