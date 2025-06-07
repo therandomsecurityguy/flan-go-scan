@@ -1,11 +1,13 @@
 scan:
-  timeout: 2s
-  ports: "1-1024"
-  rate_limit: 5
+  timeout: 3s
+  ports: "1-10000"
+  rate_limit: 200
 dns:
-  ttl: 5m
+  ttl: 10m
 output:
   format: json
   directory: ./reports
 checkpoint:
   file: scan-state.json
+vulners:
+  api_key: ${VULNERS_API_KEY}
