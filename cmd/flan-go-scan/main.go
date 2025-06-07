@@ -9,10 +9,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/therandomsecurityguy/flan-go-scan/internal/config"
-	"github.com/therandomsecurityguy/flan-go-scan/internal/dns"
-	"github.com/therandomsecurityguy/flan-go-scan/internal/output"
-	"github.com/therandomsecurityguy/flan-go-scan/internal/scanner"
+	"github.com/yourusername/flanscan/internal/config"
+	"github.com/yourusername/flanscan/internal/dns"
+	"github.com/yourusername/flanscan/internal/output"
+	"github.com/yourusername/flanscan/internal/scanner"
 )
 
 func parsePorts(portStr string) []int {
@@ -93,17 +93,28 @@ func main() {
 				go func(ip string, port int) {
 					defer wg.Done()
 					limiter.Wait()
+					// Use DetectProtocol with a goroutine and channel
+					resultsChan := make(chan string, 1)
+					var innerWg sync.WaitGroup
+					innerWg.Add(1)
+					go scanner.DetectProtocol(ip, port, cfg.Scan.Timeout, resultsChan, &innerWg)
+					innerWg.Wait()
+					close(resultsChan)
+					service := "unknown"
+					for s := range resultsChan {
+						service = s
+					}
+					// For demo, perform a fake vulnerability match
+					vulns := []string{}
+					if service == "ssh" {
+						vulns = append(vulns, "CVE-2022-5678")
+					}
+					// We do a TCP scan to get the banner for ScanResult.Banner
 					open, banner := scanner.ScanTCP(ip, port, cfg.Scan.Timeout)
 					if !open {
 						return
 					}
 					tls := scanner.DetectTLS(ip, port, cfg.Scan.Timeout)
-					service := scanner.DetectService(port, banner, tls)
-					// For demo, fake vulnerability match
-					vulns := []string{}
-					if service == "ssh" {
-						vulns = append(vulns, "CVE-2022-5678")
-					}
 					mu.Lock()
 					results = append(results, scanner.ScanResult{
 						Host: ip, Port: port, Protocol: "tcp", Service: service, Banner: banner, TLS: tls, Vulnerabilities: vulns,
