@@ -18,12 +18,27 @@ A modular, extensible network vulnerability scanner in Go. This is an update to 
 
 1. Place targets in `ips.txt`
 2. Edit `config/config.yaml` as needed
-3. Build and run:
+3. Build:
 
 ```
 go build -o flan-go-scan ./cmd/flan-go-scan
-./flan-go-scan -ips=ips.txt
 ```
+
+4. Acquire API key from vulners.com and set environment variable
+
+```
+export VULNERS_API_KEY="your_api_key_here"
+```
+5. Run with all of the features:
+
+```
+./flan-go-scan \
+  -config=config/config.yaml \
+  -ips=ips.txt \
+  -format=json \
+  -concurrency=500 \
+  -vulners-api-key=$VULNERS_API_KEY
+  ```
 ## Common Run Options
 
 Specify a different IPs file:
