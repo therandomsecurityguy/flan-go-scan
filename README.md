@@ -24,7 +24,7 @@ A modular, extensible network vulnerability scanner in Go. This is an update to 
 go build -o flan-go-scan ./cmd/flan-go-scan
 ```
 
-4. Acquire API key from vulners.com and set environment variable
+4. Acquire API key from vulners.com and set environment variable:
 
 ```
 export VULNERS_API_KEY="your_api_key_here"
