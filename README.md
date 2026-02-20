@@ -55,7 +55,7 @@ export VULNERS_API_KEY="your_api_key_here"
 ## Common Run Options
 
 Scan a domain (DNS enumeration + port scan):
-`./flan-go-scan -domain=together.ai`
+`./flan-go-scan -domain=example.com`
 
 Specify a different IPs file:
 `./flan-go-scan -ips=mytargets.txt`
