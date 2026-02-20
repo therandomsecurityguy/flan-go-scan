@@ -9,10 +9,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/yourusername/flanscan/internal/config"
-	"github.com/yourusername/flanscan/internal/dns"
-	"github.com/yourusername/flanscan/internal/output"
-	"github.com/yourusername/flanscan/internal/scanner"
+	"github.com/therandomsecurityguy/flan-go-scan/internal/config"
+	"github.com/therandomsecurityguy/flan-go-scan/internal/dns"
+	"github.com/therandomsecurityguy/flan-go-scan/internal/output"
+	"github.com/therandomsecurityguy/flan-go-scan/internal/scanner"
 )
 
 func parsePorts(portStr string) []int {
@@ -53,6 +53,7 @@ func readHosts(filename string) ([]string, error) {
 func main() {
 	configPath := flag.String("config", "config/config.yaml", "Path to config file")
 	ipsFile := flag.String("ips", "ips.txt", "File with hosts to scan")
+	domain := flag.String("domain", "", "Domain to enumerate (e.g., together.ai)")
 	flag.Parse()
 
 	cfg, err := config.LoadConfig(*configPath)
@@ -61,9 +62,48 @@ func main() {
 		os.Exit(1)
 	}
 
-	hosts, err := readHosts(*ipsFile)
-	if err != nil {
-		fmt.Println("Failed to read hosts:", err)
+	var hosts []string
+
+	if *domain != "" {
+		fmt.Printf("Enumerating DNS records for domain: %s\n", *domain)
+		enumerator := dns.NewEnumerator(cfg.Scan.Timeout, 50)
+		enumResults, err := enumerator.Enumerate(*domain)
+		if err != nil {
+			fmt.Printf("DNS enumeration error: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("Found %d hosts via DNS enumeration\n", len(enumResults))
+		for _, result := range enumResults {
+			hostIP := result.IP.String()
+			fmt.Printf("  - %s (%s) [%s]\n", result.Hostname, hostIP, result.Type)
+			hosts = append(hosts, hostIP)
+		}
+
+		nsRecords, err := dns.GetNSRecords(*domain)
+		if err == nil && len(nsRecords) > 0 {
+			fmt.Printf("Nameservers: %v\n", nsRecords)
+		}
+
+		mxRecords, err := dns.GetMXRecords(*domain)
+		if err == nil && len(mxRecords) > 0 {
+			fmt.Printf("Mail servers: %v\n", mxRecords)
+		}
+
+		txtRecords, err := dns.GetTXTRecords(*domain)
+		if err == nil && len(txtRecords) > 0 {
+			fmt.Printf("TXT records: %v\n", txtRecords)
+		}
+	} else {
+		hosts, err = readHosts(*ipsFile)
+		if err != nil {
+			fmt.Println("Failed to read hosts:", err)
+			os.Exit(1)
+		}
+	}
+
+	if len(hosts) == 0 {
+		fmt.Println("No hosts to scan. Provide -domain or hosts file.")
 		os.Exit(1)
 	}
 
