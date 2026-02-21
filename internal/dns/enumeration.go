@@ -102,16 +102,16 @@ func (e *Enumerator) Enumerate(domain string) ([]EnumerationResult, error) {
 		fullHost := host + "." + domain
 		ctx, cancel := context.WithTimeout(context.Background(), e.timeout)
 		defer cancel()
-		ips, err := resolver.LookupIP(ctx, fullHost)
+		addrs, err := resolver.LookupIPAddr(ctx, fullHost)
 		if err != nil {
 			return
 		}
 
-		for _, ip := range ips {
+		for _, addr := range addrs {
 			mu.Lock()
 			results = append(results, EnumerationResult{
 				Hostname: fullHost,
-				IP:       ip,
+				IP:       addr.IP,
 				Type:     "subdomain",
 			})
 			mu.Unlock()
@@ -137,13 +137,13 @@ func (e *Enumerator) Enumerate(domain string) ([]EnumerationResult, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), e.timeout)
 	defer cancel()
-	ips, err := resolver.LookupIP(ctx, domain)
-	if err == nil && len(ips) > 0 {
-		for _, ip := range ips {
+	addrs, err := resolver.LookupIPAddr(ctx, domain)
+	if err == nil && len(addrs) > 0 {
+		for _, addr := range addrs {
 			mu.Lock()
 			results = append(results, EnumerationResult{
 				Hostname: domain,
-				IP:       ip,
+				IP:       addr.IP,
 				Type:     "apex",
 			})
 			mu.Unlock()
@@ -173,8 +173,8 @@ func (e *Enumerator) reverseSweep(domain string, results []EnumerationResult) []
 	var targetNS string
 	for _, ns := range nameservers {
 		host := strings.TrimSuffix(ns.Host, ".")
-		ips, err := resolver.LookupIP(ctx, host)
-		if err == nil && len(ips) > 0 {
+		addrs, err := resolver.LookupIPAddr(ctx, host)
+		if err == nil && len(addrs) > 0 {
 			targetNS = ns.Host
 			break
 		}
@@ -269,11 +269,11 @@ func GetTXTRecords(domain string) ([]string, error) {
 	return txtRecords, nil
 }
 
-func GetCNAMERecords(alias string) ([]string, error) {
+func GetCNAMERecords(alias string) (string, error) {
 	resolver := &net.Resolver{PreferGo: true}
-	cnameRecords, err := resolver.LookupCNAME(context.Background(), alias)
+	cname, err := resolver.LookupCNAME(context.Background(), alias)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	return cnameRecords, nil
+	return strings.TrimSuffix(cname, "."), nil
 }

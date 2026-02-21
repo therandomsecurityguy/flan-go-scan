@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"flag"
 	"fmt"
 	"os"
@@ -34,20 +33,18 @@ func parsePorts(portStr string) []int {
 }
 
 func readHosts(filename string) ([]string, error) {
-	file, err := os.Open(filename)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	var hosts []string
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line != "" {
-			hosts = append(hosts, line)
+	var r *os.File
+	if filename == "-" {
+		r = os.Stdin
+	} else {
+		f, err := os.Open(filename)
+		if err != nil {
+			return nil, err
 		}
+		defer f.Close()
+		r = f
 	}
-	return hosts, scanner.Err()
+	return scanner.ParseTargets(r)
 }
 
 func main() {
