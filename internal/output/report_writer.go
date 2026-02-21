@@ -36,16 +36,35 @@ func (w *ReportWriter) WriteCSV(results []scanner.ScanResult) error {
 	defer file.Close()
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
-	header := []string{"Host", "Port", "Protocol", "Service", "Banner", "TLS", "Vulnerabilities"}
+	header := []string{"Host", "Port", "Protocol", "Service", "Banner", "TLS", "TLS_Version", "TLS_Subject", "TLS_Issuer", "TLS_Expired", "TLS_SelfSigned", "Vulnerabilities"}
 	writer.Write(header)
 	for _, res := range results {
+		tlsEnabled := "false"
+		tlsVersion := ""
+		tlsSubject := ""
+		tlsIssuer := ""
+		tlsExpired := ""
+		tlsSelfSigned := ""
+		if res.TLS != nil && res.TLS.Enabled {
+			tlsEnabled = "true"
+			tlsVersion = res.TLS.Version
+			tlsSubject = res.TLS.Subject
+			tlsIssuer = res.TLS.Issuer
+			tlsExpired = fmt.Sprintf("%v", res.TLS.Expired)
+			tlsSelfSigned = fmt.Sprintf("%v", res.TLS.SelfSigned)
+		}
 		writer.Write([]string{
 			res.Host,
 			fmt.Sprintf("%d", res.Port),
 			res.Protocol,
 			res.Service,
 			res.Banner,
-			fmt.Sprintf("%v", res.TLS),
+			tlsEnabled,
+			tlsVersion,
+			tlsSubject,
+			tlsIssuer,
+			tlsExpired,
+			tlsSelfSigned,
 			strings.Join(res.Vulnerabilities, ";"),
 		})
 	}

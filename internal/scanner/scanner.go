@@ -3,22 +3,21 @@ package scanner
 import (
 	"fmt"
 	"net"
-	"strings"
 	"time"
 )
 
 type ScanResult struct {
-	Host            string
-	Port            int
-	Protocol        string
-	Service         string
-	Banner          string
-	TLS             bool
-	Vulnerabilities []string
+	Host            string     `json:"host"`
+	Port            int        `json:"port"`
+	Protocol        string     `json:"protocol"`
+	Service         string     `json:"service"`
+	Banner          string     `json:"banner"`
+	TLS             *TLSResult `json:"tls,omitempty"`
+	Vulnerabilities []string   `json:"vulnerabilities,omitempty"`
 }
 
 func ScanTCP(host string, port int, timeout time.Duration) (bool, string) {
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
 		return false, ""
@@ -31,7 +30,7 @@ func ScanTCP(host string, port int, timeout time.Duration) (bool, string) {
 }
 
 func ScanUDP(host string, port int, timeout time.Duration) (bool, string) {
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	conn, err := net.DialTimeout("udp", addr, timeout)
 	if err != nil {
 		return false, ""
@@ -45,27 +44,4 @@ func ScanUDP(host string, port int, timeout time.Duration) (bool, string) {
 		return false, ""
 	}
 	return true, string(buf[:n])
-}
-
-func DetectService(port int, banner string, tls bool) string {
-	if tls {
-		return "https"
-	}
-	switch port {
-	case 22:
-		return "ssh"
-	case 80:
-		return "http"
-	case 443:
-		return "https"
-	case 53:
-		return "dns"
-	}
-	if strings.Contains(strings.ToLower(banner), "ftp") {
-		return "ftp"
-	}
-	if strings.Contains(strings.ToLower(banner), "ssh") {
-		return "ssh"
-	}
-	return "unknown"
 }

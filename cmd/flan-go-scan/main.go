@@ -154,10 +154,10 @@ func main() {
 					if !open {
 						return
 					}
-					tls := scanner.DetectTLS(ip, port, cfg.Scan.Timeout)
+					tlsResult := scanner.InspectTLS(ip, port, cfg.Scan.Timeout)
 					mu.Lock()
 					results = append(results, scanner.ScanResult{
-						Host: ip, Port: port, Protocol: "tcp", Service: service, Banner: banner, TLS: tls, Vulnerabilities: vulns,
+						Host: ip, Port: port, Protocol: "tcp", Service: service, Banner: banner, TLS: tlsResult, Vulnerabilities: vulns,
 					})
 					mu.Unlock()
 					checkpoint.Save(ip, port)
@@ -175,7 +175,8 @@ func main() {
 		reportWriter.WriteCSV(results)
 	default:
 		for _, res := range results {
-			fmt.Printf("%s:%d [%s] TLS:%v - %s Vulns:%v\n", res.Host, res.Port, res.Service, res.TLS, res.Banner, res.Vulnerabilities)
+			tlsEnabled := res.TLS != nil && res.TLS.Enabled
+			fmt.Printf("%s:%d [%s] TLS:%v - %s Vulns:%v\n", res.Host, res.Port, res.Service, tlsEnabled, res.Banner, res.Vulnerabilities)
 		}
 	}
 }
