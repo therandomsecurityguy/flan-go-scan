@@ -113,6 +113,7 @@ func main() {
 	checkpoint := scanner.NewCheckpoint(cfg.Checkpoint.File)
 	reportWriter := output.NewReportWriter(cfg.Output.Directory)
 
+	pool := scanner.NewWorkerPool(cfg.Scan.Workers)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var results []scanner.ScanResult
@@ -129,9 +130,11 @@ func main() {
 				if checkpoint.ShouldSkip(ipStr, port) {
 					continue
 				}
+				pool.Acquire()
 				wg.Add(1)
 				go func(ip string, port int) {
 					defer wg.Done()
+					defer pool.Release()
 					limiter.Wait()
 					// Use DetectProtocol with a goroutine and channel
 					resultsChan := make(chan string, 1)
