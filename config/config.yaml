@@ -2,6 +2,7 @@ scan:
   timeout: 3s
   ports: "1-10000"
   rate_limit: 200
+  workers: 100
 dns:
   ttl: 10m
 output:

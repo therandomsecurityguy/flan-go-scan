@@ -11,6 +11,7 @@ type Config struct {
 		Timeout   time.Duration `mapstructure:"timeout"`
 		Ports     string        `mapstructure:"ports"`
 		RateLimit int           `mapstructure:"rate_limit"`
+		Workers   int           `mapstructure:"workers"`
 	} `mapstructure:"scan"`
 	DNS struct {
 		TTL time.Duration `mapstructure:"ttl"`
