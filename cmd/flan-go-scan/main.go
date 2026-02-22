@@ -74,6 +74,7 @@ func main() {
 	configPath := flag.String("config", "config/config.yaml", "Path to config file")
 	ipsFile := flag.String("ips", "ips.txt", "File with hosts to scan")
 	domain := flag.String("domain", "", "Domain to enumerate (e.g., together.ai)")
+	topPorts := flag.String("top-ports", "", "Use top port list: 100 or 1000")
 	flag.Parse()
 
 	cfg, err := config.LoadConfig(*configPath)
@@ -138,9 +139,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	ports, err := parsePorts(cfg.Scan.Ports)
-	if err != nil {
-		slog.Error("invalid port configuration", "err", err)
+	var ports []int
+	switch *topPorts {
+	case "100":
+		ports = scanner.TopPorts100
+	case "1000":
+		ports = scanner.TopPorts1000
+	case "":
+		var err error
+		ports, err = parsePorts(cfg.Scan.Ports)
+		if err != nil {
+			slog.Error("invalid port configuration", "err", err)
+			os.Exit(1)
+		}
+	default:
+		slog.Error("invalid --top-ports value, use 100 or 1000", "value", *topPorts)
 		os.Exit(1)
 	}
 
@@ -232,6 +245,10 @@ func main() {
 	wg.Wait()
 	close(resultsCh)
 	collectWg.Wait()
+
+	if err := checkpoint.Flush(); err != nil {
+		slog.Error("failed to flush checkpoint", "err", err)
+	}
 
 	slog.Info("scan complete", "results", len(results))
 

@@ -150,76 +150,7 @@ func (e *Enumerator) Enumerate(domain string) ([]EnumerationResult, error) {
 		}
 	}
 
-	results = e.reverseSweep(domain, results)
-
 	return results, nil
-}
-
-func (e *Enumerator) reverseSweep(domain string, results []EnumerationResult) []EnumerationResult {
-	var mu sync.Mutex
-
-	resolver := &net.Resolver{
-		PreferGo: true,
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), e.timeout)
-	defer cancel()
-
-	nameservers, err := resolver.LookupNS(ctx, domain)
-	if err != nil || len(nameservers) == 0 {
-		return results
-	}
-
-	var targetNS string
-	for _, ns := range nameservers {
-		host := strings.TrimSuffix(ns.Host, ".")
-		addrs, err := resolver.LookupIPAddr(ctx, host)
-		if err == nil && len(addrs) > 0 {
-			targetNS = ns.Host
-			break
-		}
-	}
-
-	if targetNS == "" {
-		return results
-	}
-
-	conn, err := net.DialTimeout("udp", targetNS, e.timeout)
-	if err != nil {
-		return results
-	}
-	defer conn.Close()
-
-	axfrQuery := fmt.Sprintf("axfr query for %s", domain)
-	conn.Write([]byte(axfrQuery))
-	conn.SetReadDeadline(time.Now().Add(e.timeout))
-
-	buf := make([]byte, 4096)
-	n, err := conn.Read(buf)
-	if err == nil && n > 0 {
-		response := string(buf[:n])
-		if strings.Contains(response, domain) {
-			lines := strings.Split(response, "\n")
-			for _, line := range lines {
-				if strings.Contains(line, "A") || strings.Contains(line, "AAAA") {
-					parts := strings.Fields(line)
-					for _, part := range parts {
-						if ip := net.ParseIP(part); ip != nil {
-							mu.Lock()
-							results = append(results, EnumerationResult{
-								Hostname: domain,
-								IP:       ip,
-								Type:     "zone_transfer",
-							})
-							mu.Unlock()
-						}
-					}
-				}
-			}
-		}
-	}
-
-	return results
 }
 
 func ResolveHostname(host string) ([]net.IP, error) {
