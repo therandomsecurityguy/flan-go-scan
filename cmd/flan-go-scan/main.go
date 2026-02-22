@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/therandomsecurityguy/flan-go-scan/internal/config"
 	"github.com/therandomsecurityguy/flan-go-scan/internal/dns"
@@ -14,22 +18,41 @@ import (
 	"github.com/therandomsecurityguy/flan-go-scan/internal/scanner"
 )
 
-func parsePorts(portStr string) []int {
+func parsePorts(portStr string) ([]int, error) {
 	var ports []int
 	for _, part := range strings.Split(portStr, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
 		if strings.Contains(part, "-") {
-			bounds := strings.Split(part, "-")
-			start, _ := strconv.Atoi(bounds[0])
-			end, _ := strconv.Atoi(bounds[1])
+			bounds := strings.SplitN(part, "-", 2)
+			start, err := strconv.Atoi(bounds[0])
+			if err != nil {
+				return nil, fmt.Errorf("invalid port range start %q: %w", bounds[0], err)
+			}
+			end, err := strconv.Atoi(bounds[1])
+			if err != nil {
+				return nil, fmt.Errorf("invalid port range end %q: %w", bounds[1], err)
+			}
+			if start > end || start < 1 || end > 65535 {
+				return nil, fmt.Errorf("invalid port range %d-%d", start, end)
+			}
 			for p := start; p <= end; p++ {
 				ports = append(ports, p)
 			}
 		} else {
-			p, _ := strconv.Atoi(part)
+			p, err := strconv.Atoi(part)
+			if err != nil {
+				return nil, fmt.Errorf("invalid port %q: %w", part, err)
+			}
+			if p < 1 || p > 65535 {
+				return nil, fmt.Errorf("port out of range: %d", p)
+			}
 			ports = append(ports, p)
 		}
 	}
-	return ports
+	return ports, nil
 }
 
 func readHosts(filename string) ([]string, error) {
@@ -55,56 +78,72 @@ func main() {
 
 	cfg, err := config.LoadConfig(*configPath)
 	if err != nil {
-		fmt.Println("Config error:", err)
+		slog.Error("config error", "err", err)
 		os.Exit(1)
 	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		slog.Warn("received signal, shutting down", "signal", sig)
+		cancel()
+	}()
 
 	var hosts []string
 
 	if *domain != "" {
-		fmt.Printf("Enumerating DNS records for domain: %s\n", *domain)
+		slog.Info("enumerating DNS records", "domain", *domain)
 		enumerator := dns.NewEnumerator(cfg.Scan.Timeout, 50)
 		enumResults, err := enumerator.Enumerate(*domain)
 		if err != nil {
-			fmt.Printf("DNS enumeration error: %v\n", err)
+			slog.Error("DNS enumeration failed", "err", err)
 			os.Exit(1)
 		}
 
-		fmt.Printf("Found %d hosts via DNS enumeration\n", len(enumResults))
+		slog.Info("DNS enumeration complete", "hosts", len(enumResults))
 		for _, result := range enumResults {
 			hostIP := result.IP.String()
-			fmt.Printf("  - %s (%s) [%s]\n", result.Hostname, hostIP, result.Type)
+			slog.Info("discovered host", "hostname", result.Hostname, "ip", hostIP, "type", result.Type)
 			hosts = append(hosts, hostIP)
 		}
 
 		nsRecords, err := dns.GetNSRecords(*domain)
 		if err == nil && len(nsRecords) > 0 {
-			fmt.Printf("Nameservers: %v\n", nsRecords)
+			slog.Info("nameservers", "records", nsRecords)
 		}
 
 		mxRecords, err := dns.GetMXRecords(*domain)
 		if err == nil && len(mxRecords) > 0 {
-			fmt.Printf("Mail servers: %v\n", mxRecords)
+			slog.Info("mail servers", "records", mxRecords)
 		}
 
 		txtRecords, err := dns.GetTXTRecords(*domain)
 		if err == nil && len(txtRecords) > 0 {
-			fmt.Printf("TXT records: %v\n", txtRecords)
+			slog.Info("TXT records", "records", txtRecords)
 		}
 	} else {
 		hosts, err = readHosts(*ipsFile)
 		if err != nil {
-			fmt.Println("Failed to read hosts:", err)
+			slog.Error("failed to read hosts", "err", err)
 			os.Exit(1)
 		}
 	}
 
 	if len(hosts) == 0 {
-		fmt.Println("No hosts to scan. Provide -domain or hosts file.")
+		slog.Error("no hosts to scan, provide -domain or hosts file")
 		os.Exit(1)
 	}
 
-	ports := parsePorts(cfg.Scan.Ports)
+	ports, err := parsePorts(cfg.Scan.Ports)
+	if err != nil {
+		slog.Error("invalid port configuration", "err", err)
+		os.Exit(1)
+	}
+
 	dnsCache := dns.NewDNSCache(cfg.DNS.TTL)
 	limiter := scanner.NewRateLimiter(cfg.Scan.RateLimit)
 	checkpoint := scanner.NewCheckpoint(cfg.Checkpoint.File)
@@ -116,14 +155,20 @@ func main() {
 	var results []scanner.ScanResult
 
 	for _, host := range hosts {
+		if ctx.Err() != nil {
+			break
+		}
 		ips, err := dnsCache.Lookup(host)
 		if err != nil {
-			fmt.Printf("DNS error for %s: %v\n", host, err)
+			slog.Warn("DNS lookup failed", "host", host, "err", err)
 			continue
 		}
 		for _, ip := range ips {
 			ipStr := ip.String()
 			for _, port := range ports {
+				if ctx.Err() != nil {
+					break
+				}
 				if checkpoint.ShouldSkip(ipStr, port) {
 					continue
 				}
@@ -132,6 +177,9 @@ func main() {
 				go func(ip string, port int) {
 					defer wg.Done()
 					defer pool.Release()
+					if ctx.Err() != nil {
+						return
+					}
 					limiter.Wait()
 
 					svc := scanner.DetectService(ip, port, cfg.Scan.Timeout)
@@ -158,12 +206,17 @@ func main() {
 	}
 	wg.Wait()
 
-	// Output
+	slog.Info("scan complete", "results", len(results))
+
 	switch cfg.Output.Format {
 	case "json":
-		reportWriter.WriteJSON(results)
+		if err := reportWriter.WriteJSON(results); err != nil {
+			slog.Error("failed to write JSON report", "err", err)
+		}
 	case "csv":
-		reportWriter.WriteCSV(results)
+		if err := reportWriter.WriteCSV(results); err != nil {
+			slog.Error("failed to write CSV report", "err", err)
+		}
 	default:
 		for _, res := range results {
 			fmt.Printf("%s:%d [%s %s] TLS:%v %s\n", res.Host, res.Port, res.Service, res.Version, res.TLS != nil, res.Banner)
