@@ -4,9 +4,11 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/therandomsecurityguy/flan-go-scan/internal/scanner"
@@ -80,6 +82,41 @@ func (w *ReportWriter) WriteCSV(results []scanner.ScanResult) error {
 		}); err != nil {
 			return fmt.Errorf("write csv row: %w", err)
 		}
+	}
+	return nil
+}
+
+type JSONLWriter struct {
+	mu  sync.Mutex
+	enc *json.Encoder
+	w   io.WriteCloser
+}
+
+func NewJSONLWriter(outputDir string) (*JSONLWriter, error) {
+	var w io.WriteCloser
+	if outputDir == "" || outputDir == "-" {
+		w = os.Stdout
+	} else {
+		os.MkdirAll(outputDir, 0755)
+		filename := filepath.Join(outputDir, fmt.Sprintf("scan-%s.jsonl", time.Now().Format("20060102-150405")))
+		f, err := os.Create(filename)
+		if err != nil {
+			return nil, fmt.Errorf("create %s: %w", filename, err)
+		}
+		w = f
+	}
+	return &JSONLWriter{enc: json.NewEncoder(w), w: w}, nil
+}
+
+func (jw *JSONLWriter) WriteResult(result scanner.ScanResult) error {
+	jw.mu.Lock()
+	defer jw.mu.Unlock()
+	return jw.enc.Encode(result)
+}
+
+func (jw *JSONLWriter) Close() error {
+	if jw.w != os.Stdout {
+		return jw.w.Close()
 	}
 	return nil
 }

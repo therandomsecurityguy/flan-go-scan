@@ -6,7 +6,7 @@ scan:
 dns:
   ttl: 10m
 output:
-  format: json
+  format: jsonl
   directory: ./reports
 checkpoint:
   file: scan-state.json
