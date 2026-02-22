@@ -35,7 +35,7 @@ func DetectService(host string, port int, timeout time.Duration) ServiceResult {
 	case 53:
 		return detectDNS(conn, timeout)
 	case 80, 443, 8080, 8443:
-		return detectHTTP(conn, timeout)
+		return detectHTTP(conn, host, timeout)
 	case 110:
 		return detectPOP3(conn, timeout)
 	case 143, 993:
@@ -133,8 +133,8 @@ func detectDNS(conn net.Conn, timeout time.Duration) ServiceResult {
 	return ServiceResult{Name: "unknown"}
 }
 
-func detectHTTP(conn net.Conn, timeout time.Duration) ServiceResult {
-	fmt.Fprintf(conn, "HEAD / HTTP/1.0\r\nHost: %s\r\n\r\n", conn.RemoteAddr().String())
+func detectHTTP(conn net.Conn, host string, timeout time.Duration) ServiceResult {
+	fmt.Fprintf(conn, "HEAD / HTTP/1.0\r\nHost: %s\r\n\r\n", host)
 	conn.SetReadDeadline(time.Now().Add(timeout))
 	s := bufio.NewScanner(conn)
 	var serverVersion string
