@@ -149,10 +149,37 @@ func main() {
 	checkpoint := scanner.NewCheckpoint(cfg.Checkpoint.File)
 	reportWriter := output.NewReportWriter(cfg.Output.Directory)
 
+	var jsonlWriter *output.JSONLWriter
+	if cfg.Output.Format == "jsonl" {
+		jw, err := output.NewJSONLWriter(cfg.Output.Directory)
+		if err != nil {
+			slog.Error("failed to create JSONL writer", "err", err)
+			os.Exit(1)
+		}
+		jsonlWriter = jw
+		defer jsonlWriter.Close()
+	}
+
+	resultsCh := make(chan scanner.ScanResult, 100)
+	var collectWg sync.WaitGroup
+	var results []scanner.ScanResult
+
+	collectWg.Add(1)
+	go func() {
+		defer collectWg.Done()
+		for res := range resultsCh {
+			if jsonlWriter != nil {
+				if err := jsonlWriter.WriteResult(res); err != nil {
+					slog.Error("failed to write JSONL result", "err", err)
+				}
+			} else {
+				results = append(results, res)
+			}
+		}
+	}()
+
 	pool := scanner.NewWorkerPool(cfg.Scan.Workers)
 	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var results []scanner.ScanResult
 
 	for _, host := range hosts {
 		if ctx.Err() != nil {
@@ -188,25 +215,29 @@ func main() {
 					}
 
 					tlsResult := scanner.InspectTLS(ip, port, cfg.Scan.Timeout)
-					mu.Lock()
-					results = append(results, scanner.ScanResult{
-						Host:    ip,
-						Port:    port,
+					resultsCh <- scanner.ScanResult{
+						Host:     ip,
+						Port:     port,
 						Protocol: "tcp",
-						Service: svc.Name,
-						Version: svc.Version,
-						Banner:  svc.Banner,
-						TLS:     tlsResult,
-					})
-					mu.Unlock()
+						Service:  svc.Name,
+						Version:  svc.Version,
+						Banner:   svc.Banner,
+						TLS:      tlsResult,
+					}
 					checkpoint.Save(ip, port)
 				}(ipStr, port)
 			}
 		}
 	}
 	wg.Wait()
+	close(resultsCh)
+	collectWg.Wait()
 
 	slog.Info("scan complete", "results", len(results))
+
+	if jsonlWriter != nil {
+		return
+	}
 
 	switch cfg.Output.Format {
 	case "json":
