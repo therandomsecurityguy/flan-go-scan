@@ -42,7 +42,7 @@ func TestTLSVersionString(t *testing.T) {
 
 func TestInspectTLSClosedPort(t *testing.T) {
 	result := InspectTLS("127.0.0.1", 1, 100*time.Millisecond)
-	if result.Enabled {
-		t.Error("expected TLS disabled for closed port")
+	if result != nil {
+		t.Error("expected nil for closed port")
 	}
 }

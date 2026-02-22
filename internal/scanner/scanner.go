@@ -11,7 +11,8 @@ type ScanResult struct {
 	Port            int        `json:"port"`
 	Protocol        string     `json:"protocol"`
 	Service         string     `json:"service"`
-	Banner          string     `json:"banner"`
+	Version         string     `json:"version,omitempty"`
+	Banner          string     `json:"banner,omitempty"`
 	TLS             *TLSResult `json:"tls,omitempty"`
 	Vulnerabilities []string   `json:"vulnerabilities,omitempty"`
 }

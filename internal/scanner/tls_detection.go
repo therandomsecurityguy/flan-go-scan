@@ -24,14 +24,14 @@ func InspectTLS(host string, port int, timeout time.Duration) *TLSResult {
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
-		return &TLSResult{Enabled: false}
+		return nil
 	}
 	defer conn.Close()
 
 	tlsConn := tls.Client(conn, &tls.Config{InsecureSkipVerify: true})
 	tlsConn.SetDeadline(time.Now().Add(timeout))
 	if err := tlsConn.Handshake(); err != nil {
-		return &TLSResult{Enabled: false}
+		return nil
 	}
 
 	state := tlsConn.ConnectionState()

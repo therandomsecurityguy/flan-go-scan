@@ -133,31 +133,22 @@ func main() {
 					defer wg.Done()
 					defer pool.Release()
 					limiter.Wait()
-					// Use DetectProtocol with a goroutine and channel
-					resultsChan := make(chan string, 1)
-					var innerWg sync.WaitGroup
-					innerWg.Add(1)
-					go scanner.DetectProtocol(ip, port, cfg.Scan.Timeout, resultsChan, &innerWg)
-					innerWg.Wait()
-					close(resultsChan)
-					service := "unknown"
-					for s := range resultsChan {
-						service = s
-					}
-					// For demo, perform a fake vulnerability match
-					vulns := []string{}
-					if service == "ssh" {
-						vulns = append(vulns, "CVE-2022-5678")
-					}
-					// We do a TCP scan to get the banner for ScanResult.Banner
-					open, banner := scanner.ScanTCP(ip, port, cfg.Scan.Timeout)
-					if !open {
+
+					svc := scanner.DetectService(ip, port, cfg.Scan.Timeout)
+					if svc.Name == "closed" {
 						return
 					}
+
 					tlsResult := scanner.InspectTLS(ip, port, cfg.Scan.Timeout)
 					mu.Lock()
 					results = append(results, scanner.ScanResult{
-						Host: ip, Port: port, Protocol: "tcp", Service: service, Banner: banner, TLS: tlsResult, Vulnerabilities: vulns,
+						Host:    ip,
+						Port:    port,
+						Protocol: "tcp",
+						Service: svc.Name,
+						Version: svc.Version,
+						Banner:  svc.Banner,
+						TLS:     tlsResult,
 					})
 					mu.Unlock()
 					checkpoint.Save(ip, port)
@@ -175,8 +166,7 @@ func main() {
 		reportWriter.WriteCSV(results)
 	default:
 		for _, res := range results {
-			tlsEnabled := res.TLS != nil && res.TLS.Enabled
-			fmt.Printf("%s:%d [%s] TLS:%v - %s Vulns:%v\n", res.Host, res.Port, res.Service, tlsEnabled, res.Banner, res.Vulnerabilities)
+			fmt.Printf("%s:%d [%s %s] TLS:%v %s\n", res.Host, res.Port, res.Service, res.Version, res.TLS != nil, res.Banner)
 		}
 	}
 }
