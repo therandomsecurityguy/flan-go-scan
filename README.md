@@ -6,15 +6,20 @@ A modular, extensible network vulnerability scanner in Go. This is an update to 
 
 ## Features
 
-- Scans TCP/UDP ports on multiple hosts
-- Banner grabbing, TLS detection, protocol heuristics
+- TCP port scanning with bounded worker pool concurrency
+- Service detection with version extraction (SSH, HTTP, SMTP, FTP, MySQL, Redis, RDP, and more)
+- Banner grabbing and protocol heuristics
+- TLS certificate inspection (version, cipher suite, subject, issuer, SANs, expiry, self-signed detection)
 - DNS enumeration (subdomain brute-forcing, zone transfer attempts)
 - NS, MX, TXT, CNAME record lookups
 - DNS resolution caching
-- Rate limiting for API calls
+- CIDR input support and stdin piping (`-ips -`)
+- Rate limiting
 - Scan resumption (checkpointing)
+- Graceful shutdown on SIGINT/SIGTERM
+- Structured logging via `log/slog`
 - Configurable via YAML
-- Outputs JSON, CSV, or text reports
+- Outputs JSON, JSONL (streaming), CSV, or text reports
 
 ## Usage
 
@@ -28,11 +33,11 @@ This will:
 1. Enumerate subdomains via DNS brute-forcing
 2. Resolve NS, MX, TXT, CNAME records
 3. Scan discovered hosts for open ports
-4. Detect services and check for vulnerabilities
+4. Detect services and extract versions
 
-### Traditional IP-based scanning
+### IP-based scanning
 
-1. Place targets in `ips.txt`
+1. Place targets in `ips.txt` (supports IPs, hostnames, CIDR notation)
 2. Edit `config/config.yaml` as needed
 3. Build:
 
@@ -40,18 +45,18 @@ This will:
 go build -o flan-go-scan ./cmd/flan-go-scan
 ```
 
-4. Acquire API key from vulners.com and set environment variable:
+4. Run:
 
 ```
-export VULNERS_API_KEY="your_api_key_here"
+./flan-go-scan -config=config/config.yaml -ips=ips.txt
 ```
-5. Run with all of the features:
+
+### Stdin piping
 
 ```
-./flan-go-scan \
-  -config=config/config.yaml \
-  -ips=ips.txt
-  ```
+echo "10.0.0.0/24" | ./flan-go-scan -ips -
+```
+
 ## Common Run Options
 
 Scan a domain (DNS enumeration + port scan):
@@ -62,6 +67,12 @@ Specify a different IPs file:
 
 Specify config file:
 `./flan-go-scan -config=config/config.yaml`
+
+## Tests
+
+```
+go test ./internal/scanner/ -v
+```
 
 ## License
 
