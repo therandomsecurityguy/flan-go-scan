@@ -20,6 +20,54 @@ import (
 	"github.com/therandomsecurityguy/flan-go-scan/internal/scanner"
 )
 
+var version = "dev"
+
+const banner = `
+  __ _
+ / _| | __ _ _ __    ___  ___ __ _ _ __
+| |_| |/ _' | '_ \  / __|/ __/ _' | '_ \
+|  _| | (_| | | | | \__ \ (_| (_| | | | |
+|_| |_|\__,_|_| |_| |___/\___\__,_|_| |_| %s
+
+`
+
+func printBanner() {
+	fmt.Fprintf(os.Stderr, banner, version)
+}
+
+func usage() {
+	printBanner()
+	fmt.Fprintf(os.Stderr, `Usage:
+  flan [flags]
+
+TARGET:
+  -t, -target string       target host/IP to scan
+  -l, -list string         file containing targets (default "ips.txt")
+  -d, -domain string       domain to enumerate via DNS
+
+PORTS:
+  -p, -ports string        ports to scan (from config if not set)
+  --top-ports string       use top port list: 100 or 1000
+
+CONFIGURATION:
+  -c, -config string       path to config file (default "config/config.yaml")
+  -w, -wordlist string     custom DNS subdomain wordlist file
+  -r, -resolver string     custom DNS resolver (ip:port)
+
+OUTPUT:
+  --json                   output in JSON format
+  --jsonl                  output in JSONL format (streaming)
+  --csv                    output in CSV format
+
+EXAMPLES:
+  flan -t scanme.nmap.org
+  flan -l targets.txt --top-ports 1000
+  flan -d together.ai
+  echo "10.0.0.0/24" | flan -l -
+
+`)
+}
+
 func parsePorts(portStr string) ([]int, error) {
 	var ports []int
 	for _, part := range strings.Split(portStr, ",") {
@@ -73,16 +121,51 @@ func readHosts(filename string) ([]string, error) {
 }
 
 func main() {
-	configPath := flag.String("config", "config/config.yaml", "Path to config file")
-	ipsFile := flag.String("ips", "ips.txt", "File with hosts to scan")
-	domain := flag.String("domain", "", "Domain to enumerate (e.g., together.ai)")
-	topPorts := flag.String("top-ports", "", "Use top port list: 100 or 1000")
+	flag.Usage = usage
+	printBanner()
+
+	configPath := flag.String("config", "config/config.yaml", "")
+	configShort := flag.String("c", "config/config.yaml", "")
+	listFile := flag.String("list", "ips.txt", "")
+	listShort := flag.String("l", "ips.txt", "")
+	target := flag.String("target", "", "")
+	targetShort := flag.String("t", "", "")
+	domain := flag.String("domain", "", "")
+	domainShort := flag.String("d", "", "")
+	portsFlag := flag.String("ports", "", "")
+	portsShort := flag.String("p", "", "")
+	topPorts := flag.String("top-ports", "", "")
+	wordlist := flag.String("wordlist", "", "")
+	wordlistShort := flag.String("w", "", "")
+	resolver := flag.String("resolver", "", "")
+	resolverShort := flag.String("r", "", "")
+	jsonFlag := flag.Bool("json", false, "")
+	jsonlFlag := flag.Bool("jsonl", false, "")
+	csvFlag := flag.Bool("csv", false, "")
 	flag.Parse()
 
-	cfg, err := config.LoadConfig(*configPath)
+	cfgPath := coalesce(*configPath, *configShort)
+	ipsFile := coalesce(*listFile, *listShort)
+	tgt := coalesce(*target, *targetShort)
+	dom := coalesce(*domain, *domainShort)
+	portStr := coalesce(*portsFlag, *portsShort)
+	wl := coalesce(*wordlist, *wordlistShort)
+	res := coalesce(*resolver, *resolverShort)
+
+	cfg, err := config.LoadConfig(cfgPath)
 	if err != nil {
 		slog.Error("config error", "err", err)
 		os.Exit(1)
+	}
+
+	if *jsonFlag {
+		cfg.Output.Format = "json"
+	}
+	if *jsonlFlag {
+		cfg.Output.Format = "jsonl"
+	}
+	if *csvFlag {
+		cfg.Output.Format = "csv"
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -98,10 +181,29 @@ func main() {
 
 	var hosts []string
 
-	if *domain != "" {
-		slog.Info("enumerating DNS records", "domain", *domain)
-		enumerator := dns.NewEnumerator(cfg.Scan.Timeout, 50)
-		enumResults, err := enumerator.Enumerate(*domain)
+	if tgt != "" {
+		hosts = append(hosts, tgt)
+	} else if dom != "" {
+		slog.Info("enumerating DNS records", "domain", dom)
+
+		var enumerator *dns.Enumerator
+		if res != "" {
+			enumerator = dns.NewEnumeratorWithResolver(cfg.Scan.Timeout, 50, res)
+		} else {
+			enumerator = dns.NewEnumerator(cfg.Scan.Timeout, 50)
+		}
+
+		var enumResults []dns.EnumerationResult
+		if wl != "" {
+			words, err := dns.LoadWordlist(wl)
+			if err != nil {
+				slog.Error("failed to load wordlist", "err", err)
+				os.Exit(1)
+			}
+			enumResults, err = enumerator.EnumerateWithWordlist(dom, words)
+		} else {
+			enumResults, err = enumerator.Enumerate(dom)
+		}
 		if err != nil {
 			slog.Error("DNS enumeration failed", "err", err)
 			os.Exit(1)
@@ -114,22 +216,22 @@ func main() {
 			hosts = append(hosts, hostIP)
 		}
 
-		nsRecords, err := dns.GetNSRecords(*domain)
+		nsRecords, err := dns.GetNSRecords(dom)
 		if err == nil && len(nsRecords) > 0 {
 			slog.Info("nameservers", "records", nsRecords)
 		}
 
-		mxRecords, err := dns.GetMXRecords(*domain)
+		mxRecords, err := dns.GetMXRecords(dom)
 		if err == nil && len(mxRecords) > 0 {
 			slog.Info("mail servers", "records", mxRecords)
 		}
 
-		txtRecords, err := dns.GetTXTRecords(*domain)
+		txtRecords, err := dns.GetTXTRecords(dom)
 		if err == nil && len(txtRecords) > 0 {
 			slog.Info("TXT records", "records", txtRecords)
 		}
 	} else {
-		hosts, err = readHosts(*ipsFile)
+		hosts, err = readHosts(ipsFile)
 		if err != nil {
 			slog.Error("failed to read hosts", "err", err)
 			os.Exit(1)
@@ -137,7 +239,7 @@ func main() {
 	}
 
 	if len(hosts) == 0 {
-		slog.Error("no hosts to scan, provide -domain or hosts file")
+		slog.Error("no hosts to scan, provide -t, -d, or -l")
 		os.Exit(1)
 	}
 
@@ -148,8 +250,11 @@ func main() {
 	case "1000":
 		ports = scanner.TopPorts1000
 	case "":
-		var err error
-		ports, err = parsePorts(cfg.Scan.Ports)
+		if portStr != "" {
+			ports, err = parsePorts(portStr)
+		} else {
+			ports, err = parsePorts(cfg.Scan.Ports)
+		}
 		if err != nil {
 			slog.Error("invalid port configuration", "err", err)
 			os.Exit(1)
@@ -162,7 +267,11 @@ func main() {
 	dnsCache := dns.NewDNSCache(cfg.DNS.TTL)
 	limiter := scanner.NewRateLimiter(cfg.Scan.RateLimit)
 	checkpoint := scanner.NewCheckpoint(cfg.Checkpoint.File)
-	reportWriter := output.NewReportWriter(cfg.Output.Directory)
+	reportWriter, err := output.NewReportWriter(cfg.Output.Directory)
+	if err != nil {
+		slog.Error("failed to create report writer", "err", err)
+		os.Exit(1)
+	}
 	cveLookup := scanner.NewCVELookup()
 
 	var jsonlWriter *output.JSONLWriter
@@ -264,14 +373,12 @@ func main() {
 					}
 
 					var vulns []string
-					var cpes []string
 					if fp.Metadata != nil {
 						var meta struct {
 							CPEs []string `json:"cpes"`
 						}
 						if json.Unmarshal(fp.Metadata, &meta) == nil {
-							cpes = meta.CPEs
-							for _, cpe := range cpes {
+							for _, cpe := range meta.CPEs {
 								for _, cve := range cveLookup.Lookup(cpe) {
 									vulns = append(vulns, cve.ID)
 								}
@@ -322,12 +429,19 @@ func main() {
 		slog.Error("failed to flush checkpoint", "err", err)
 	}
 
+	if ctx.Err() == nil {
+		checkpoint.Clear()
+	}
+
 	slog.Info("scan complete",
 		"services_found", progress.ServicesFound.Load(),
 		"ports_scanned", progress.PortsScanned.Load(),
 	)
 
 	if jsonlWriter != nil {
+		if jsonlWriter.Filename != "" {
+			slog.Info("report written", "path", jsonlWriter.Filename)
+		}
 		return
 	}
 
@@ -335,14 +449,28 @@ func main() {
 	case "json":
 		if err := reportWriter.WriteJSON(results); err != nil {
 			slog.Error("failed to write JSON report", "err", err)
+		} else {
+			slog.Info("report written", "format", "json", "directory", cfg.Output.Directory)
 		}
 	case "csv":
 		if err := reportWriter.WriteCSV(results); err != nil {
 			slog.Error("failed to write CSV report", "err", err)
+		} else {
+			slog.Info("report written", "format", "csv", "directory", cfg.Output.Directory)
 		}
 	default:
 		for _, res := range results {
 			fmt.Printf("%s:%d [%s %s] TLS:%v %s\n", res.Host, res.Port, res.Service, res.Version, res.TLS != nil, res.Banner)
 		}
 	}
+}
+
+func coalesce(a, b string) string {
+	if a != "" && a != "config/config.yaml" && a != "ips.txt" {
+		return a
+	}
+	if b != "" && b != "config/config.yaml" && b != "ips.txt" {
+		return b
+	}
+	return a
 }

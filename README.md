@@ -1,77 +1,89 @@
 ![Go-Gopher-Flan-small](https://github.com/user-attachments/assets/e08ec4c5-8619-4437-a043-af7ea4a035fb)
 
-# flan-go-scan
+# flan
 
-A modular, extensible network vulnerability scanner in Go. This is an update to the deprecated Flan Scan project: https://github.com/cloudflare/flan
+A network scanner in Go. Successor to [Flan Scan](https://github.com/cloudflare/flan).
 
 ## Features
 
-- TCP port scanning with bounded worker pool concurrency
-- Service detection with version extraction (SSH, HTTP, SMTP, FTP, MySQL, Redis, RDP, and more)
-- Banner grabbing and protocol heuristics
-- TLS certificate inspection (version, cipher suite, subject, issuer, SANs, expiry, self-signed detection)
-- DNS enumeration (subdomain brute-forcing, zone transfer attempts)
+- TCP port scanning with bounded concurrency
+- 51-protocol service fingerprinting via [fingerprintx](https://github.com/praetorian-inc/fingerprintx) (SSH, HTTP, MySQL, Redis, RDP, PostgreSQL, and more)
+- Technology detection (Wappalyzer) and CPE generation
+- TLS certificate inspection (version, cipher, subject, issuer, SANs, expiry, self-signed)
+- CVE lookup by CPE via NVD API
+- Host discovery (TCP probe to skip dead hosts)
+- DNS enumeration with wildcard detection and custom wordlist/resolver support
 - NS, MX, TXT, CNAME record lookups
-- DNS resolution caching
-- CIDR input support and stdin piping (`-ips -`)
-- Rate limiting
-- Scan resumption (checkpointing)
+- CIDR and stdin input support
+- nmap top 100/1000 port lists
+- Scan checkpointing and resumption
+- Progress reporting
 - Graceful shutdown on SIGINT/SIGTERM
-- Structured logging via `log/slog`
+- JSON, JSONL (streaming), CSV, and text output
 - Configurable via YAML
-- Outputs JSON, JSONL (streaming), CSV, or text reports
+
+## Build
+
+```
+go build -o flan ./cmd/flan
+```
 
 ## Usage
 
-### Domain-based scanning (recommended)
-
 ```
-./flan-go-scan -domain=together.ai
+./flan --help
 ```
 
-This will:
-1. Enumerate subdomains via DNS brute-forcing
-2. Resolve NS, MX, TXT, CNAME records
-3. Scan discovered hosts for open ports
-4. Detect services and extract versions
-
-### IP-based scanning
-
-1. Place targets in `ips.txt` (supports IPs, hostnames, CIDR notation)
-2. Edit `config/config.yaml` as needed
-3. Build:
+Scan a single target:
 
 ```
-go build -o flan-go-scan ./cmd/flan-go-scan
+./flan -t scanme.nmap.org
 ```
-
-4. Run:
-
-```
-./flan-go-scan -config=config/config.yaml -ips=ips.txt
-```
-
-### Stdin piping
-
-```
-echo "10.0.0.0/24" | ./flan-go-scan -ips -
-```
-
-## Common Run Options
 
 Scan a domain (DNS enumeration + port scan):
-`./flan-go-scan -domain=example.com`
 
-Specify a different IPs file:
-`./flan-go-scan -ips=mytargets.txt`
+```
+./flan -d example.com
+```
 
-Specify config file:
-`./flan-go-scan -config=config/config.yaml`
+Scan from a file with top 1000 ports:
+
+```
+./flan -l targets.txt --top-ports 1000
+```
+
+Scan a CIDR range from stdin:
+
+```
+echo "10.0.0.0/24" | ./flan -l -
+```
+
+Scan with custom wordlist and resolver:
+
+```
+./flan -d example.com -w wordlist.txt -r 8.8.8.8:53
+```
+
+## Flags
+
+| Flag | Description |
+|------|-------------|
+| `-t` | Target host/IP |
+| `-l` | Target file (default `ips.txt`, `-` for stdin) |
+| `-d` | Domain to enumerate via DNS |
+| `-p` | Ports to scan |
+| `--top-ports` | Use nmap top port list: `100` or `1000` |
+| `-c` | Config file (default `config/config.yaml`) |
+| `-w` | Custom DNS subdomain wordlist |
+| `-r` | Custom DNS resolver (ip:port) |
+| `--json` | JSON output |
+| `--jsonl` | JSONL streaming output |
+| `--csv` | CSV output |
 
 ## Tests
 
 ```
-go test ./internal/scanner/ -v
+go test ./... -v
 ```
 
 ## License

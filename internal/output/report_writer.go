@@ -18,9 +18,11 @@ type ReportWriter struct {
 	OutputDir string
 }
 
-func NewReportWriter(outputDir string) *ReportWriter {
-	os.MkdirAll(outputDir, 0755)
-	return &ReportWriter{OutputDir: outputDir}
+func NewReportWriter(outputDir string) (*ReportWriter, error) {
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return nil, fmt.Errorf("create output directory: %w", err)
+	}
+	return &ReportWriter{OutputDir: outputDir}, nil
 }
 
 func (w *ReportWriter) WriteJSON(results []scanner.ScanResult) error {
@@ -47,7 +49,7 @@ func (w *ReportWriter) WriteCSV(results []scanner.ScanResult) error {
 	defer file.Close()
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
-	header := []string{"Host", "Port", "Protocol", "Service", "Banner", "TLS", "TLS_Version", "TLS_Subject", "TLS_Issuer", "TLS_Expired", "TLS_SelfSigned", "Vulnerabilities"}
+	header := []string{"Host", "Port", "Protocol", "Service", "Version", "Banner", "TLS", "TLS_Version", "TLS_Subject", "TLS_Issuer", "TLS_Expired", "TLS_SelfSigned", "Vulnerabilities"}
 	if err := writer.Write(header); err != nil {
 		return fmt.Errorf("write csv header: %w", err)
 	}
@@ -71,6 +73,7 @@ func (w *ReportWriter) WriteCSV(results []scanner.ScanResult) error {
 			fmt.Sprintf("%d", res.Port),
 			res.Protocol,
 			res.Service,
+			res.Version,
 			res.Banner,
 			tlsEnabled,
 			tlsVersion,
@@ -87,25 +90,27 @@ func (w *ReportWriter) WriteCSV(results []scanner.ScanResult) error {
 }
 
 type JSONLWriter struct {
-	mu  sync.Mutex
-	enc *json.Encoder
-	w   io.WriteCloser
+	mu       sync.Mutex
+	enc      *json.Encoder
+	w        io.WriteCloser
+	Filename string
 }
 
 func NewJSONLWriter(outputDir string) (*JSONLWriter, error) {
 	var w io.WriteCloser
+	var filename string
 	if outputDir == "" || outputDir == "-" {
 		w = os.Stdout
 	} else {
 		os.MkdirAll(outputDir, 0755)
-		filename := filepath.Join(outputDir, fmt.Sprintf("scan-%s.jsonl", time.Now().Format("20060102-150405")))
+		filename = filepath.Join(outputDir, fmt.Sprintf("scan-%s.jsonl", time.Now().Format("20060102-150405")))
 		f, err := os.Create(filename)
 		if err != nil {
 			return nil, fmt.Errorf("create %s: %w", filename, err)
 		}
 		w = f
 	}
-	return &JSONLWriter{enc: json.NewEncoder(w), w: w}, nil
+	return &JSONLWriter{enc: json.NewEncoder(w), w: w, Filename: filename}, nil
 }
 
 func (jw *JSONLWriter) WriteResult(result scanner.ScanResult) error {

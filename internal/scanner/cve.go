@@ -19,10 +19,10 @@ type CVE struct {
 }
 
 type CVELookup struct {
-	client *http.Client
-	cache  map[string][]CVE
-	mu     sync.RWMutex
-	last   time.Time
+	client  *http.Client
+	cache   map[string][]CVE
+	mu      sync.Mutex
+	last    time.Time
 }
 
 func NewCVELookup() *CVELookup {
@@ -37,27 +37,21 @@ func (c *CVELookup) Lookup(cpe string) []CVE {
 		return nil
 	}
 
-	c.mu.RLock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if cached, ok := c.cache[cpe]; ok {
-		c.mu.RUnlock()
 		return cached
 	}
-	c.mu.RUnlock()
 
-	c.mu.Lock()
 	elapsed := time.Since(c.last)
 	if elapsed < 6*time.Second {
 		time.Sleep(6*time.Second - elapsed)
 	}
 	c.last = time.Now()
-	c.mu.Unlock()
 
 	cves := c.queryNVD(cpe)
-
-	c.mu.Lock()
 	c.cache[cpe] = cves
-	c.mu.Unlock()
-
 	return cves
 }
 
@@ -69,7 +63,7 @@ func (c *CVELookup) queryNVD(cpe string) []CVE {
 		slog.Warn("NVD request build failed", "cpe", cpe, "err", err)
 		return nil
 	}
-	req.Header.Set("User-Agent", "flan-go-scan/1.0")
+	req.Header.Set("User-Agent", "flan/1.0")
 
 	resp, err := c.client.Do(req)
 	if err != nil {

@@ -28,9 +28,17 @@ func (c *DNSCache) Lookup(host string) ([]net.IP, error) {
 	c.mu.RLock()
 	entry, exists := c.entries[host]
 	c.mu.RUnlock()
+
 	if exists && time.Now().Before(entry.expires) {
 		return entry.ips, nil
 	}
+
+	if exists {
+		c.mu.Lock()
+		delete(c.entries, host)
+		c.mu.Unlock()
+	}
+
 	ips, err := net.LookupIP(host)
 	if err != nil {
 		return nil, err
