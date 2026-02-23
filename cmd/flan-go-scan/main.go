@@ -222,6 +222,25 @@ func main() {
 					}
 					limiter.Wait()
 
+					fp := scanner.Fingerprint(ip, port, cfg.Scan.Timeout)
+					if fp != nil {
+						var tlsResult *scanner.TLSResult
+						if fp.TLS {
+							tlsResult = scanner.InspectTLS(ip, port, cfg.Scan.Timeout)
+						}
+						resultsCh <- scanner.ScanResult{
+							Host:     ip,
+							Port:     port,
+							Protocol: fp.Transport,
+							Service:  fp.Service,
+							Version:  fp.Version,
+							TLS:      tlsResult,
+							Metadata: fp.Metadata,
+						}
+						checkpoint.Save(ip, port)
+						return
+					}
+
 					svc := scanner.DetectService(ip, port, cfg.Scan.Timeout)
 					if svc.Name == "closed" {
 						return
