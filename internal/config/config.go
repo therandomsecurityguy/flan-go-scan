@@ -8,10 +8,12 @@ import (
 
 type Config struct {
 	Scan struct {
-		Timeout   time.Duration `mapstructure:"timeout"`
-		Ports     string        `mapstructure:"ports"`
-		RateLimit int           `mapstructure:"rate_limit"`
-		Workers   int           `mapstructure:"workers"`
+		Timeout       time.Duration `mapstructure:"timeout"`
+		Ports         string        `mapstructure:"ports"`
+		RateLimit     int           `mapstructure:"rate_limit"`
+		Workers       int           `mapstructure:"workers"`
+		Discovery     bool          `mapstructure:"discovery"`
+		StatsInterval int           `mapstructure:"stats_interval"`
 	} `mapstructure:"scan"`
 	DNS struct {
 		TTL time.Duration `mapstructure:"ttl"`
