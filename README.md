@@ -12,6 +12,8 @@ A network scanner in Go. Successor to [Flan Scan](https://github.com/cloudflare/
 - TLS certificate inspection (version, cipher, subject, issuer, SANs, expiry, self-signed)
 - CVE lookup by CPE via NVD API
 - Host discovery (TCP probe to skip dead hosts)
+- Passive subdomain enumeration via 9 no-key sources (crt.sh, Common Crawl, Wayback Machine, RapidDNS, Anubis, Digitorus, HudsonRock, SiteDossier, THC)
+- CDN detection (Cloudflare) — limits scan to ports 80/443 by default on CDN hosts
 - DNS enumeration with wildcard detection and custom wordlist/resolver support
 - NS, MX, TXT, CNAME record lookups
 - CIDR and stdin input support
@@ -64,6 +66,18 @@ Scan with custom wordlist and resolver:
 ./flan -d example.com -w wordlist.txt -r 8.8.8.8:53
 ```
 
+Passive enumeration only (skip brute-force):
+
+```
+./flan -d example.com --passive-only
+```
+
+Scan all ports on CDN hosts (default is 80/443 only):
+
+```
+./flan -d example.com --scan-cdn
+```
+
 ## Flags
 
 | Flag | Description |
@@ -76,6 +90,8 @@ Scan with custom wordlist and resolver:
 | `-c` | Config file (default `config/config.yaml`) |
 | `-w` | Custom DNS subdomain wordlist |
 | `-r` | Custom DNS resolver (ip:port) |
+| `--passive-only` | Skip brute-force, use passive sources only |
+| `--scan-cdn` | Scan all ports on CDN hosts (default: 80/443 only) |
 | `--json` | JSON output |
 | `--jsonl` | JSONL streaming output |
 | `--csv` | CSV output |

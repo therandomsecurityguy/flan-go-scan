@@ -53,6 +53,8 @@ CONFIGURATION:
   -c, -config string       path to config file (default "config/config.yaml")
   -w, -wordlist string     custom DNS subdomain wordlist file
   -r, -resolver string     custom DNS resolver (ip:port)
+  --passive-only           skip brute-force, use passive sources only
+  --scan-cdn               scan all ports on CDN hosts (default: 80,443 only)
 
 OUTPUT:
   --json                   output in JSON format
@@ -139,6 +141,8 @@ func main() {
 	wordlistShort := flag.String("w", "", "")
 	resolver := flag.String("resolver", "", "")
 	resolverShort := flag.String("r", "", "")
+	passiveOnly := flag.Bool("passive-only", false, "")
+	scanCDN := flag.Bool("scan-cdn", false, "")
 	jsonFlag := flag.Bool("json", false, "")
 	jsonlFlag := flag.Bool("jsonl", false, "")
 	csvFlag := flag.Bool("csv", false, "")
@@ -184,37 +188,59 @@ func main() {
 	if tgt != "" {
 		hosts = append(hosts, tgt)
 	} else if dom != "" {
-		slog.Info("enumerating DNS records", "domain", dom)
+		slog.Info("enumerating subdomains", "domain", dom)
 
-		var enumerator *dns.Enumerator
-		if res != "" {
-			enumerator = dns.NewEnumeratorWithResolver(cfg.Scan.Timeout, 50, res)
-		} else {
-			enumerator = dns.NewEnumerator(cfg.Scan.Timeout, 50)
-		}
-
-		var enumResults []dns.EnumerationResult
-		if wl != "" {
-			words, err := dns.LoadWordlist(wl)
-			if err != nil {
-				slog.Error("failed to load wordlist", "err", err)
-				os.Exit(1)
-			}
-			enumResults, err = enumerator.EnumerateWithWordlist(dom, words)
-		} else {
-			enumResults, err = enumerator.Enumerate(dom)
-		}
+		slog.Info("running passive enumeration")
+		passiveHosts, err := dns.PassiveEnumerate(ctx, dom, cfg.Scan.Timeout)
 		if err != nil {
-			slog.Error("DNS enumeration failed", "err", err)
-			os.Exit(1)
+			slog.Warn("passive enumeration failed", "err", err)
+		} else {
+			slog.Info("passive enumeration complete", "subdomains", len(passiveHosts))
+		}
+		for _, h := range passiveHosts {
+			hosts = append(hosts, h)
 		}
 
-		slog.Info("DNS enumeration complete", "hosts", len(enumResults))
-		for _, result := range enumResults {
-			hostIP := result.IP.String()
-			slog.Info("discovered host", "hostname", result.Hostname, "ip", hostIP, "type", result.Type)
-			hosts = append(hosts, hostIP)
+		if !*passiveOnly {
+			slog.Info("running brute-force enumeration")
+			var enumerator *dns.Enumerator
+			if res != "" {
+				enumerator = dns.NewEnumeratorWithResolver(cfg.Scan.Timeout, 50, res)
+			} else {
+				enumerator = dns.NewEnumerator(cfg.Scan.Timeout, 50)
+			}
+
+			var enumResults []dns.EnumerationResult
+			if wl != "" {
+				words, err := dns.LoadWordlist(wl)
+				if err != nil {
+					slog.Error("failed to load wordlist", "err", err)
+					os.Exit(1)
+				}
+				enumResults, err = enumerator.EnumerateWithWordlist(dom, words)
+			} else {
+				enumResults, err = enumerator.Enumerate(dom)
+			}
+			if err != nil {
+				slog.Warn("brute-force enumeration failed", "err", err)
+			}
+
+			for _, result := range enumResults {
+				hosts = append(hosts, result.IP.String())
+			}
+			slog.Info("brute-force enumeration complete", "hosts", len(enumResults))
 		}
+
+		seen := make(map[string]bool)
+		var deduped []string
+		for _, h := range hosts {
+			if !seen[h] {
+				seen[h] = true
+				deduped = append(deduped, h)
+			}
+		}
+		hosts = deduped
+		slog.Info("subdomain enumeration complete", "unique_hosts", len(hosts))
 
 		nsRecords, err := dns.GetNSRecords(dom)
 		if err == nil && len(nsRecords) > 0 {
@@ -314,6 +340,17 @@ func main() {
 		os.Exit(0)
 	}
 
+	cdnDetector := scanner.NewCDNDetector()
+	cdnHosts := make(map[string]string)
+	for _, ip := range allIPs {
+		if cdn := cdnDetector.Detect(ip); cdn != "" {
+			cdnHosts[ip] = cdn
+		}
+	}
+	if len(cdnHosts) > 0 {
+		slog.Info("CDN hosts detected", "count", len(cdnHosts))
+	}
+
 	progress := scanner.NewProgress(len(allIPs))
 	statsInterval := 5
 	if cfg.Scan.StatsInterval > 0 {
@@ -346,9 +383,13 @@ func main() {
 		if ctx.Err() != nil {
 			break
 		}
+		cdn := cdnHosts[ip]
 		for _, port := range ports {
 			if ctx.Err() != nil {
 				break
+			}
+			if cdn != "" && !*scanCDN && port != 80 && port != 443 {
+				continue
 			}
 			if checkpoint.ShouldSkip(ip, port) {
 				continue
@@ -392,6 +433,7 @@ func main() {
 						Protocol:        fp.Transport,
 						Service:         fp.Service,
 						Version:         fp.Version,
+						CDN:             cdn,
 						TLS:             tlsResult,
 						Metadata:        fp.Metadata,
 						Vulnerabilities: vulns,
@@ -414,6 +456,7 @@ func main() {
 					Service:  svc.Name,
 					Version:  svc.Version,
 					Banner:   svc.Banner,
+					CDN:      cdn,
 					TLS:      tlsResult,
 				}
 				checkpoint.Save(ip, port)
