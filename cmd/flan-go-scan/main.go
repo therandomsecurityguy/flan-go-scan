@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/therandomsecurityguy/flan-go-scan/internal/config"
 	"github.com/therandomsecurityguy/flan-go-scan/internal/dns"
@@ -161,6 +163,7 @@ func main() {
 	limiter := scanner.NewRateLimiter(cfg.Scan.RateLimit)
 	checkpoint := scanner.NewCheckpoint(cfg.Checkpoint.File)
 	reportWriter := output.NewReportWriter(cfg.Output.Directory)
+	cveLookup := scanner.NewCVELookup()
 
 	var jsonlWriter *output.JSONLWriter
 	if cfg.Output.Format == "jsonl" {
@@ -172,6 +175,42 @@ func main() {
 		jsonlWriter = jw
 		defer jsonlWriter.Close()
 	}
+
+	var allIPs []string
+	for _, host := range hosts {
+		ips, err := dnsCache.Lookup(host)
+		if err != nil {
+			slog.Warn("DNS lookup failed", "host", host, "err", err)
+			continue
+		}
+		for _, ip := range ips {
+			allIPs = append(allIPs, ip.String())
+		}
+	}
+
+	if cfg.Scan.Discovery {
+		slog.Info("running host discovery", "targets", len(allIPs))
+		var alive []string
+		for _, ip := range allIPs {
+			if scanner.IsHostAlive(ip, cfg.Scan.Timeout) {
+				alive = append(alive, ip)
+			}
+		}
+		slog.Info("host discovery complete", "alive", len(alive), "filtered", len(allIPs)-len(alive))
+		allIPs = alive
+	}
+
+	if len(allIPs) == 0 {
+		slog.Info("no live hosts found")
+		os.Exit(0)
+	}
+
+	progress := scanner.NewProgress(len(allIPs))
+	statsInterval := 5
+	if cfg.Scan.StatsInterval > 0 {
+		statsInterval = cfg.Scan.StatsInterval
+	}
+	go progress.Run(ctx, time.Duration(statsInterval)*time.Second)
 
 	resultsCh := make(chan scanner.ScanResult, 100)
 	var collectWg sync.WaitGroup
@@ -194,72 +233,86 @@ func main() {
 	pool := scanner.NewWorkerPool(cfg.Scan.Workers)
 	var wg sync.WaitGroup
 
-	for _, host := range hosts {
+	for _, ip := range allIPs {
 		if ctx.Err() != nil {
 			break
 		}
-		ips, err := dnsCache.Lookup(host)
-		if err != nil {
-			slog.Warn("DNS lookup failed", "host", host, "err", err)
-			continue
-		}
-		for _, ip := range ips {
-			ipStr := ip.String()
-			for _, port := range ports {
+		for _, port := range ports {
+			if ctx.Err() != nil {
+				break
+			}
+			if checkpoint.ShouldSkip(ip, port) {
+				continue
+			}
+			pool.Acquire()
+			wg.Add(1)
+			go func(ip string, port int) {
+				defer wg.Done()
+				defer pool.Release()
 				if ctx.Err() != nil {
-					break
+					return
 				}
-				if checkpoint.ShouldSkip(ipStr, port) {
-					continue
-				}
-				pool.Acquire()
-				wg.Add(1)
-				go func(ip string, port int) {
-					defer wg.Done()
-					defer pool.Release()
-					if ctx.Err() != nil {
-						return
-					}
-					limiter.Wait()
+				limiter.Wait()
+				progress.PortsScanned.Add(1)
 
-					fp := scanner.Fingerprint(ip, port, cfg.Scan.Timeout)
-					if fp != nil {
-						var tlsResult *scanner.TLSResult
-						if fp.TLS {
-							tlsResult = scanner.InspectTLS(ip, port, cfg.Scan.Timeout)
+				fp := scanner.Fingerprint(ip, port, cfg.Scan.Timeout)
+				if fp != nil {
+					progress.ServicesFound.Add(1)
+					var tlsResult *scanner.TLSResult
+					if fp.TLS {
+						tlsResult = scanner.InspectTLS(ip, port, cfg.Scan.Timeout)
+					}
+
+					var vulns []string
+					var cpes []string
+					if fp.Metadata != nil {
+						var meta struct {
+							CPEs []string `json:"cpes"`
 						}
-						resultsCh <- scanner.ScanResult{
-							Host:     ip,
-							Port:     port,
-							Protocol: fp.Transport,
-							Service:  fp.Service,
-							Version:  fp.Version,
-							TLS:      tlsResult,
-							Metadata: fp.Metadata,
+						if json.Unmarshal(fp.Metadata, &meta) == nil {
+							cpes = meta.CPEs
+							for _, cpe := range cpes {
+								for _, cve := range cveLookup.Lookup(cpe) {
+									vulns = append(vulns, cve.ID)
+								}
+							}
 						}
-						checkpoint.Save(ip, port)
-						return
 					}
 
-					svc := scanner.DetectService(ip, port, cfg.Scan.Timeout)
-					if svc.Name == "closed" {
-						return
-					}
-
-					tlsResult := scanner.InspectTLS(ip, port, cfg.Scan.Timeout)
 					resultsCh <- scanner.ScanResult{
-						Host:     ip,
-						Port:     port,
-						Protocol: "tcp",
-						Service:  svc.Name,
-						Version:  svc.Version,
-						Banner:   svc.Banner,
-						TLS:      tlsResult,
+						Host:            ip,
+						Port:            port,
+						Protocol:        fp.Transport,
+						Service:         fp.Service,
+						Version:         fp.Version,
+						TLS:             tlsResult,
+						Metadata:        fp.Metadata,
+						Vulnerabilities: vulns,
 					}
 					checkpoint.Save(ip, port)
-				}(ipStr, port)
-			}
+					return
+				}
+
+				svc := scanner.DetectService(ip, port, cfg.Scan.Timeout)
+				if svc.Name == "closed" {
+					return
+				}
+
+				progress.ServicesFound.Add(1)
+				tlsResult := scanner.InspectTLS(ip, port, cfg.Scan.Timeout)
+				resultsCh <- scanner.ScanResult{
+					Host:     ip,
+					Port:     port,
+					Protocol: "tcp",
+					Service:  svc.Name,
+					Version:  svc.Version,
+					Banner:   svc.Banner,
+					TLS:      tlsResult,
+				}
+				checkpoint.Save(ip, port)
+			}(ip, port)
 		}
+		progress.HostsDone.Add(1)
 	}
 	wg.Wait()
 	close(resultsCh)
@@ -269,7 +322,10 @@ func main() {
 		slog.Error("failed to flush checkpoint", "err", err)
 	}
 
-	slog.Info("scan complete", "results", len(results))
+	slog.Info("scan complete",
+		"services_found", progress.ServicesFound.Load(),
+		"ports_scanned", progress.PortsScanned.Load(),
+	)
 
 	if jsonlWriter != nil {
 		return
