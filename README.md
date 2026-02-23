@@ -24,58 +24,79 @@ A network scanner in Go. Successor to [Flan Scan](https://github.com/cloudflare/
 - JSON, JSONL (streaming), CSV, and text output
 - Configurable via YAML
 
-## Build
+## Installation
+
+From GitHub:
 
 ```
+go install github.com/therandomsecurityguy/flan-go-scan/cmd/flan@latest
+```
+
+From source (go version > 1.21):
+
+```
+git clone git@github.com:therandomsecurityguy/flan-go-scan.git
+cd flan-go-scan
 go build -o flan ./cmd/flan
+./flan --help
+```
+
+Docker:
+
+```
+git clone git@github.com:therandomsecurityguy/flan-go-scan.git
+cd flan-go-scan
+docker build -t flan .
+docker run --rm flan --help
+docker run --rm flan -t scanme.nmap.org --json
 ```
 
 ## Usage
 
 ```
-./flan --help
+flan --help
 ```
 
 Scan a single target:
 
 ```
-./flan -t scanme.nmap.org
+flan -t scanme.nmap.org
 ```
 
 Scan a domain (DNS enumeration + port scan):
 
 ```
-./flan -d example.com
+flan -d example.com
 ```
 
 Scan from a file with top 1000 ports:
 
 ```
-./flan -l targets.txt --top-ports 1000
+flan -l targets.txt --top-ports 1000
 ```
 
 Scan a CIDR range from stdin:
 
 ```
-echo "10.0.0.0/24" | ./flan -l -
+echo "10.0.0.0/24" | flan -l -
 ```
 
 Scan with custom wordlist and resolver:
 
 ```
-./flan -d example.com -w wordlist.txt -r 8.8.8.8:53
+flan -d example.com -w wordlist.txt -r 8.8.8.8:53
 ```
 
 Passive enumeration only (skip brute-force):
 
 ```
-./flan -d example.com --passive-only
+flan -d example.com --passive-only
 ```
 
 Scan all ports on CDN hosts (default is 80/443 only):
 
 ```
-./flan -d example.com --scan-cdn
+flan -d example.com --scan-cdn
 ```
 
 ## Flags

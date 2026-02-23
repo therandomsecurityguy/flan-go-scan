@@ -36,7 +36,6 @@ func printBanner() {
 }
 
 func usage() {
-	printBanner()
 	fmt.Fprintf(os.Stderr, `Usage:
   flan [flags]
 
