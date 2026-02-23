@@ -21,7 +21,8 @@ type CVE struct {
 type CVELookup struct {
 	client  *http.Client
 	cache   map[string][]CVE
-	mu      sync.Mutex
+	mu      sync.RWMutex
+	rateMu  sync.Mutex
 	last    time.Time
 }
 
@@ -37,21 +38,27 @@ func (c *CVELookup) Lookup(cpe string) []CVE {
 		return nil
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
+	c.mu.RLock()
 	if cached, ok := c.cache[cpe]; ok {
+		c.mu.RUnlock()
 		return cached
 	}
+	c.mu.RUnlock()
 
+	c.rateMu.Lock()
 	elapsed := time.Since(c.last)
 	if elapsed < 6*time.Second {
 		time.Sleep(6*time.Second - elapsed)
 	}
 	c.last = time.Now()
+	c.rateMu.Unlock()
 
 	cves := c.queryNVD(cpe)
+
+	c.mu.Lock()
 	c.cache[cpe] = cves
+	c.mu.Unlock()
+
 	return cves
 }
 

@@ -147,18 +147,25 @@ func main() {
 	csvFlag := flag.Bool("csv", false, "")
 	flag.Parse()
 
-	cfgPath := coalesce(*configPath, *configShort)
-	ipsFile := coalesce(*listFile, *listShort)
-	tgt := coalesce(*target, *targetShort)
-	dom := coalesce(*domain, *domainShort)
-	portStr := coalesce(*portsFlag, *portsShort)
-	wl := coalesce(*wordlist, *wordlistShort)
-	res := coalesce(*resolver, *resolverShort)
+	set := make(map[string]bool)
+	flag.Visit(func(f *flag.Flag) { set[f.Name] = true })
+
+	cfgPath := pick(set, "config", configPath, "c", configShort, "config/config.yaml")
+	ipsFile := pick(set, "list", listFile, "l", listShort, "ips.txt")
+	tgt := pick(set, "target", target, "t", targetShort, "")
+	dom := pick(set, "domain", domain, "d", domainShort, "")
+	portStr := pick(set, "ports", portsFlag, "p", portsShort, "")
+	wl := pick(set, "wordlist", wordlist, "w", wordlistShort, "")
+	res := pick(set, "resolver", resolver, "r", resolverShort, "")
 
 	cfg, err := config.LoadConfig(cfgPath)
 	if err != nil {
 		slog.Error("config error", "err", err)
 		os.Exit(1)
+	}
+
+	if *passiveOnly && dom == "" {
+		slog.Warn("--passive-only has no effect without -d")
 	}
 
 	if *jsonFlag {
@@ -324,10 +331,28 @@ func main() {
 
 	if cfg.Scan.Discovery {
 		slog.Info("running host discovery", "targets", len(allIPs))
-		var alive []string
+		type aliveResult struct {
+			ip    string
+			alive bool
+		}
+		results := make(chan aliveResult, len(allIPs))
+		discoveryPool := scanner.NewWorkerPool(cfg.Scan.Workers)
+		var discoveryWg sync.WaitGroup
 		for _, ip := range allIPs {
-			if scanner.IsHostAlive(ip, cfg.Scan.Timeout) {
-				alive = append(alive, ip)
+			discoveryPool.Acquire()
+			discoveryWg.Add(1)
+			go func(ip string) {
+				defer discoveryWg.Done()
+				defer discoveryPool.Release()
+				results <- aliveResult{ip: ip, alive: scanner.IsHostAlive(ip, cfg.Scan.Timeout)}
+			}(ip)
+		}
+		discoveryWg.Wait()
+		close(results)
+		var alive []string
+		for r := range results {
+			if r.alive {
+				alive = append(alive, r.ip)
 			}
 		}
 		slog.Info("host discovery complete", "alive", len(alive), "filtered", len(allIPs)-len(alive))
@@ -507,12 +532,12 @@ func main() {
 	}
 }
 
-func coalesce(a, b string) string {
-	if a != "" && a != "config/config.yaml" && a != "ips.txt" {
-		return a
+func pick(set map[string]bool, long string, longVal *string, short string, shortVal *string, def string) string {
+	if set[long] {
+		return *longVal
 	}
-	if b != "" && b != "config/config.yaml" && b != "ips.txt" {
-		return b
+	if set[short] {
+		return *shortVal
 	}
-	return a
+	return def
 }
