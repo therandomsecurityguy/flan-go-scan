@@ -7,12 +7,12 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 go build -o flan-go-scan ./cmd/flan-go-scan
+RUN CGO_ENABLED=0 go build -o flan ./cmd/flan
 
 FROM cgr.dev/chainguard/static:latest
 
-COPY --from=builder /app/flan-go-scan /flan-go-scan
+COPY --from=builder /app/flan /flan
 COPY --from=builder /app/config /config
 COPY --from=builder /app/ips.txt /ips.txt
 
-ENTRYPOINT ["/flan-go-scan", "-config=/config/config.yaml"]
+ENTRYPOINT ["/flan", "-c=/config/config.yaml"]

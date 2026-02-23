@@ -2,3 +2,4 @@ reports/
 .DS_Store
 scan-state.json
 flan-go-scan
+flan
