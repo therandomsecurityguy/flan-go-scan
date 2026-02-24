@@ -21,6 +21,7 @@ A network scanner in Go. Successor to [Flan Scan](https://github.com/cloudflare/
 - Scan checkpointing and resumption
 - Progress reporting
 - Graceful shutdown on SIGINT/SIGTERM
+- AI-powered security analysis via [Together API](https://together.ai) (DeepSeek V3.1)
 - JSON, JSONL (streaming), CSV, and text output
 - Configurable via YAML
 
@@ -99,6 +100,12 @@ Scan all ports on CDN hosts (default is 80/443 only):
 flan -d example.com --scan-cdn
 ```
 
+Scan with AI-powered analysis (requires `TOGETHER_API_KEY`):
+
+```
+flan -t scanme.nmap.org --analyze
+```
+
 ## Flags
 
 | Flag | Description |
@@ -113,6 +120,7 @@ flan -d example.com --scan-cdn
 | `-r` | Custom DNS resolver (ip:port) |
 | `--passive-only` | Skip brute-force, use passive sources only |
 | `--scan-cdn` | Scan all ports on CDN hosts (default: 80/443 only) |
+| `--analyze` | AI security analysis via Together API (requires `TOGETHER_API_KEY`) |
 | `--json` | JSON output |
 | `--jsonl` | JSONL streaming output |
 | `--csv` | CSV output |
