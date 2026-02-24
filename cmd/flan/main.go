@@ -54,6 +54,7 @@ CONFIGURATION:
   -r, -resolver string     custom DNS resolver (ip:port)
   --passive-only           skip brute-force, use passive sources only
   --scan-cdn               scan all ports on CDN hosts (default: 80,443 only)
+  --udp                    enable UDP scanning (ports 53,123,161,500 by default)
   --analyze                AI-powered analysis via Together API (requires TOGETHER_API_KEY)
 
 OUTPUT:
@@ -143,6 +144,7 @@ func main() {
 	resolverShort := flag.String("r", "", "")
 	passiveOnly := flag.Bool("passive-only", false, "")
 	scanCDN := flag.Bool("scan-cdn", false, "")
+	udpFlag := flag.Bool("udp", false, "")
 	analyze := flag.Bool("analyze", false, "")
 	jsonFlag := flag.Bool("json", false, "")
 	jsonlFlag := flag.Bool("jsonl", false, "")
@@ -430,7 +432,9 @@ func main() {
 				if ctx.Err() != nil {
 					return
 				}
-				limiter.Wait()
+				if err := limiter.Wait(ctx); err != nil {
+					return
+				}
 				progress.PortsScanned.Add(1)
 
 				fp := scanner.Fingerprint(ip, port, cfg.Scan.Timeout)
@@ -438,7 +442,7 @@ func main() {
 					progress.ServicesFound.Add(1)
 					var tlsResult *scanner.TLSResult
 					if fp.TLS {
-						tlsResult = scanner.InspectTLS(ip, port, cfg.Scan.Timeout)
+						tlsResult = scanner.InspectTLS(ctx, ip, port, cfg.Scan.Timeout)
 					}
 
 					var vulns []string
@@ -476,7 +480,7 @@ func main() {
 				}
 
 				progress.ServicesFound.Add(1)
-				tlsResult := scanner.InspectTLS(ip, port, cfg.Scan.Timeout)
+				tlsResult := scanner.InspectTLS(ctx, ip, port, cfg.Scan.Timeout)
 				resultsCh <- scanner.ScanResult{
 					Host:     ip,
 					Port:     port,
@@ -493,6 +497,54 @@ func main() {
 		progress.HostsDone.Add(1)
 	}
 	wg.Wait()
+
+	udpEnabled := *udpFlag || cfg.Scan.UDP
+	if udpEnabled {
+		udpPortStr := cfg.Scan.UDPPorts
+		udpPorts, err := parsePorts(udpPortStr)
+		if err != nil {
+			slog.Error("invalid UDP port configuration", "err", err)
+			os.Exit(1)
+		}
+		var udpWg sync.WaitGroup
+		for _, ip := range allIPs {
+			if ctx.Err() != nil {
+				break
+			}
+			for _, port := range udpPorts {
+				if ctx.Err() != nil {
+					break
+				}
+				pool.Acquire()
+				udpWg.Add(1)
+				go func(ip string, port int) {
+					defer udpWg.Done()
+					defer pool.Release()
+					if ctx.Err() != nil {
+						return
+					}
+					if err := limiter.Wait(ctx); err != nil {
+						return
+					}
+					fp := scanner.FingerprintUDP(ip, port, cfg.Scan.Timeout)
+					if fp == nil {
+						return
+					}
+					progress.ServicesFound.Add(1)
+					resultsCh <- scanner.ScanResult{
+						Host:     ip,
+						Port:     port,
+						Protocol: "udp",
+						Service:  fp.Service,
+						Version:  fp.Version,
+						Metadata: fp.Metadata,
+					}
+				}(ip, port)
+			}
+		}
+		udpWg.Wait()
+	}
+
 	close(resultsCh)
 	collectWg.Wait()
 

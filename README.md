@@ -20,6 +20,8 @@ A network scanner in Go. Successor to [Flan Scan](https://github.com/cloudflare/
 - nmap top 100/1000 port lists
 - Scan checkpointing and resumption
 - Progress reporting
+- UDP service detection (DNS, NTP, SNMP, IPSEC) via `--udp`
+- Context-aware rate limiting and TLS inspection — clean shutdown on Ctrl+C
 - Graceful shutdown on SIGINT/SIGTERM
 - AI-powered security analysis via [Together API](https://together.ai) (DeepSeek V3.1)
 - JSON, JSONL (streaming), CSV, and text output
@@ -100,6 +102,12 @@ Scan all ports on CDN hosts (default is 80/443 only):
 flan -d example.com --scan-cdn
 ```
 
+Enable UDP scanning:
+
+```
+flan -t scanme.nmap.org --udp
+```
+
 Scan with AI-powered analysis (requires `TOGETHER_API_KEY`):
 
 ```
@@ -120,6 +128,7 @@ flan -t scanme.nmap.org --analyze
 | `-r` | Custom DNS resolver (ip:port) |
 | `--passive-only` | Skip brute-force, use passive sources only |
 | `--scan-cdn` | Scan all ports on CDN hosts (default: 80/443 only) |
+| `--udp` | Enable UDP scanning (ports 53, 123, 161, 500 by default) |
 | `--analyze` | AI security analysis via Together API (requires `TOGETHER_API_KEY`) |
 | `--json` | JSON output |
 | `--jsonl` | JSONL streaming output |

@@ -5,6 +5,8 @@ scan:
   workers: 100
   discovery: true
   stats_interval: 5
+  udp: false
+  udp_ports: "53,123,161,500"
 dns:
   ttl: 10m
 output:

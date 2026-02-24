@@ -19,6 +19,14 @@ type FingerprintResult struct {
 }
 
 func Fingerprint(host string, port int, timeout time.Duration) *FingerprintResult {
+	return fingerprint(host, port, timeout, false)
+}
+
+func FingerprintUDP(host string, port int, timeout time.Duration) *FingerprintResult {
+	return fingerprint(host, port, timeout, true)
+}
+
+func fingerprint(host string, port int, timeout time.Duration, udp bool) *FingerprintResult {
 	addr, err := netip.ParseAddrPort(fmt.Sprintf("%s:%d", host, port))
 	if err != nil {
 		return nil
@@ -33,6 +41,7 @@ func Fingerprint(host string, port int, timeout time.Duration) *FingerprintResul
 		DefaultTimeout: timeout,
 		FastMode:       false,
 		Verbose:        false,
+		UDP:            udp,
 	}
 
 	result, err := cfg.SimpleScanTarget(target)
