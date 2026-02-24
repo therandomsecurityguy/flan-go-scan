@@ -307,11 +307,6 @@ func main() {
 		slog.Error("invalid checkpoint path", "err", err)
 		os.Exit(1)
 	}
-	reportWriter, err := output.NewReportWriter(cfg.Output.Directory)
-	if err != nil {
-		slog.Error("failed to create report writer", "err", err)
-		os.Exit(1)
-	}
 	cveLookup := scanner.NewCVELookup()
 
 	var jsonlWriter *output.JSONLWriter
@@ -587,17 +582,24 @@ func main() {
 	}
 
 	switch cfg.Output.Format {
-	case "json":
-		if err := reportWriter.WriteJSON(results); err != nil {
-			slog.Error("failed to write JSON report", "err", err)
-		} else {
-			slog.Info("report written", "format", "json", "directory", cfg.Output.Directory)
+	case "json", "csv":
+		rw, err := output.NewReportWriter(cfg.Output.Directory)
+		if err != nil {
+			slog.Error("failed to create report writer", "err", err)
+			os.Exit(1)
 		}
-	case "csv":
-		if err := reportWriter.WriteCSV(results); err != nil {
-			slog.Error("failed to write CSV report", "err", err)
+		if cfg.Output.Format == "json" {
+			if err := rw.WriteJSON(results); err != nil {
+				slog.Error("failed to write JSON report", "err", err)
+			} else {
+				slog.Info("report written", "format", "json", "directory", cfg.Output.Directory)
+			}
 		} else {
-			slog.Info("report written", "format", "csv", "directory", cfg.Output.Directory)
+			if err := rw.WriteCSV(results); err != nil {
+				slog.Error("failed to write CSV report", "err", err)
+			} else {
+				slog.Info("report written", "format", "csv", "directory", cfg.Output.Directory)
+			}
 		}
 	default:
 		for _, res := range results {
