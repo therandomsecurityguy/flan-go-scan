@@ -6,6 +6,7 @@ require (
 	github.com/praetorian-inc/fingerprintx v1.1.19
 	github.com/projectdiscovery/subfinder/v2 v2.12.0
 	github.com/spf13/viper v1.17.0
+	github.com/togethercomputer/together-go v0.6.0
 	golang.org/x/time v0.11.0
 )
 
@@ -114,6 +115,7 @@ require (
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/rtred v0.1.2 // indirect
+	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/tidwall/tinyqueue v0.1.1 // indirect
 	github.com/tklauser/go-sysconf v0.3.12 // indirect
 	github.com/tklauser/numcpus v0.6.1 // indirect

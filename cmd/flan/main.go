@@ -32,7 +32,7 @@ const banner = `
 `
 
 func printBanner() {
-	fmt.Fprintf(os.Stderr, banner, version)
+	fmt.Fprintf(os.Stderr, "\033[36m"+banner+"\033[0m", version)
 }
 
 func usage() {
@@ -54,6 +54,7 @@ CONFIGURATION:
   -r, -resolver string     custom DNS resolver (ip:port)
   --passive-only           skip brute-force, use passive sources only
   --scan-cdn               scan all ports on CDN hosts (default: 80,443 only)
+  --analyze                AI-powered analysis via Together API (requires TOGETHER_API_KEY)
 
 OUTPUT:
   --json                   output in JSON format
@@ -142,6 +143,7 @@ func main() {
 	resolverShort := flag.String("r", "", "")
 	passiveOnly := flag.Bool("passive-only", false, "")
 	scanCDN := flag.Bool("scan-cdn", false, "")
+	analyze := flag.Bool("analyze", false, "")
 	jsonFlag := flag.Bool("json", false, "")
 	jsonlFlag := flag.Bool("jsonl", false, "")
 	csvFlag := flag.Bool("csv", false, "")
@@ -380,7 +382,8 @@ func main() {
 	if cfg.Scan.StatsInterval > 0 {
 		statsInterval = cfg.Scan.StatsInterval
 	}
-	go progress.Run(ctx, time.Duration(statsInterval)*time.Second)
+	progressCtx, stopProgress := context.WithCancel(ctx)
+	go progress.Run(progressCtx, time.Duration(statsInterval)*time.Second)
 
 	resultsCh := make(chan scanner.ScanResult, 100)
 	var collectWg sync.WaitGroup
@@ -394,7 +397,8 @@ func main() {
 				if err := jsonlWriter.WriteResult(res); err != nil {
 					slog.Error("failed to write JSONL result", "err", err)
 				}
-			} else {
+			}
+			if jsonlWriter == nil || *analyze {
 				results = append(results, res)
 			}
 		}
@@ -500,10 +504,24 @@ func main() {
 		checkpoint.Clear()
 	}
 
+	stopProgress()
+
 	slog.Info("scan complete",
 		"services_found", progress.ServicesFound.Load(),
 		"ports_scanned", progress.PortsScanned.Load(),
 	)
+
+	if *analyze && len(results) > 0 {
+		analysis, err := scanner.Analyze(ctx, results, cfg.Output.Directory)
+		if err != nil {
+			slog.Error("analysis failed", "err", err)
+		} else {
+			fmt.Println()
+			printAnalysis(analysis.Analysis)
+			fmt.Println("\033[2m  Powered by Together AI (deepseek-ai/DeepSeek-V3.1)\033[0m")
+			fmt.Println()
+		}
+	}
 
 	if jsonlWriter != nil {
 		if jsonlWriter.Filename != "" {
@@ -528,6 +546,47 @@ func main() {
 	default:
 		for _, res := range results {
 			fmt.Printf("%s:%d [%s %s] TLS:%v %s\n", res.Host, res.Port, res.Service, res.Version, res.TLS != nil, res.Banner)
+		}
+	}
+}
+
+func printAnalysis(text string) {
+	const (
+		red    = "\033[31m"
+		yellow = "\033[33m"
+		green  = "\033[32m"
+		cyan   = "\033[36m"
+		bold   = "\033[1m"
+		dim    = "\033[2m"
+		reset  = "\033[0m"
+	)
+
+	for _, line := range strings.Split(text, "\n") {
+		clean := strings.ReplaceAll(line, "**", "")
+		clean = strings.TrimLeft(clean, "# ")
+		clean = strings.TrimSpace(clean)
+		if clean == "" {
+			fmt.Println()
+			continue
+		}
+
+		switch {
+		case strings.Contains(clean, "CRITICAL"):
+			fmt.Println(bold + red + clean + reset)
+		case strings.Contains(clean, "HIGH"):
+			fmt.Println(red + clean + reset)
+		case strings.Contains(clean, "MEDIUM"):
+			fmt.Println(yellow + clean + reset)
+		case strings.Contains(clean, "LOW"):
+			fmt.Println(green + clean + reset)
+		case strings.Contains(clean, "INFO"):
+			fmt.Println(green + clean + reset)
+		case strings.HasPrefix(line, "---"):
+			fmt.Println(dim + "─────────────────────────────────────────" + reset)
+		case strings.HasPrefix(clean, "- "):
+			fmt.Println(dim + "  " + clean + reset)
+		default:
+			fmt.Println(clean)
 		}
 	}
 }
