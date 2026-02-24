@@ -16,6 +16,6 @@ func NewRateLimiter(rps int) *RateLimiter {
 	}
 }
 
-func (rl *RateLimiter) Wait() {
-	rl.limiter.Wait(context.Background())
+func (rl *RateLimiter) Wait(ctx context.Context) error {
+	return rl.limiter.Wait(ctx)
 }

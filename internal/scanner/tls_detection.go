@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
@@ -20,9 +21,10 @@ type TLSResult struct {
 	SelfSigned  bool      `json:"self_signed,omitempty"`
 }
 
-func InspectTLS(host string, port int, timeout time.Duration) *TLSResult {
+func InspectTLS(ctx context.Context, host string, port int, timeout time.Duration) *TLSResult {
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	conn, err := net.DialTimeout("tcp", addr, timeout)
+	d := net.Dialer{Timeout: timeout}
+	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil
 	}

@@ -14,6 +14,8 @@ type Config struct {
 		Workers       int           `mapstructure:"workers"`
 		Discovery     bool          `mapstructure:"discovery"`
 		StatsInterval int           `mapstructure:"stats_interval"`
+		UDP           bool          `mapstructure:"udp"`
+		UDPPorts      string        `mapstructure:"udp_ports"`
 	} `mapstructure:"scan"`
 	DNS struct {
 		TTL time.Duration `mapstructure:"ttl"`
