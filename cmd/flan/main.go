@@ -227,7 +227,7 @@ func main() {
 					slog.Error("failed to load wordlist", "err", err)
 					os.Exit(1)
 				}
-				enumResults, err = enumerator.EnumerateWithWordlist(dom, words)
+				enumResults, err = enumerator.EnumerateWithWordlist(ctx, dom, words)
 			} else {
 				enumResults, err = enumerator.Enumerate(dom)
 			}
@@ -302,7 +302,11 @@ func main() {
 
 	dnsCache := dns.NewDNSCache(cfg.DNS.TTL)
 	limiter := scanner.NewRateLimiter(cfg.Scan.RateLimit)
-	checkpoint := scanner.NewCheckpoint(cfg.Checkpoint.File)
+	checkpoint, err := scanner.NewCheckpoint(cfg.Checkpoint.File)
+	if err != nil {
+		slog.Error("invalid checkpoint path", "err", err)
+		os.Exit(1)
+	}
 	reportWriter, err := output.NewReportWriter(cfg.Output.Directory)
 	if err != nil {
 		slog.Error("failed to create report writer", "err", err)

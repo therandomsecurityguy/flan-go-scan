@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 type CVE struct {
@@ -24,6 +26,7 @@ type CVELookup struct {
 	mu      sync.RWMutex
 	rateMu  sync.Mutex
 	last    time.Time
+	sf      singleflight.Group
 }
 
 func NewCVELookup() *CVELookup {
@@ -45,21 +48,28 @@ func (c *CVELookup) Lookup(cpe string) []CVE {
 	}
 	c.mu.RUnlock()
 
-	c.rateMu.Lock()
-	elapsed := time.Since(c.last)
-	if elapsed < 6*time.Second {
-		time.Sleep(6*time.Second - elapsed)
+	v, _, _ := c.sf.Do(cpe, func() (interface{}, error) {
+		c.rateMu.Lock()
+		elapsed := time.Since(c.last)
+		if elapsed < 6*time.Second {
+			time.Sleep(6*time.Second - elapsed)
+		}
+		c.last = time.Now()
+		c.rateMu.Unlock()
+
+		cves := c.queryNVD(cpe)
+
+		c.mu.Lock()
+		c.cache[cpe] = cves
+		c.mu.Unlock()
+
+		return cves, nil
+	})
+
+	if cves, ok := v.([]CVE); ok {
+		return cves
 	}
-	c.last = time.Now()
-	c.rateMu.Unlock()
-
-	cves := c.queryNVD(cpe)
-
-	c.mu.Lock()
-	c.cache[cpe] = cves
-	c.mu.Unlock()
-
-	return cves
+	return nil
 }
 
 func (c *CVELookup) queryNVD(cpe string) []CVE {
