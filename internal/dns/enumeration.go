@@ -3,8 +3,9 @@ package dns
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"fmt"
-	"math/rand"
+	"math/big"
 	"net"
 	"os"
 	"strings"
@@ -87,10 +88,10 @@ func LoadWordlist(path string) ([]string, error) {
 }
 
 func (e *Enumerator) Enumerate(domain string) ([]EnumerationResult, error) {
-	return e.EnumerateWithWordlist(domain, defaultSubdomains)
+	return e.EnumerateWithWordlist(context.Background(), domain, defaultSubdomains)
 }
 
-func (e *Enumerator) EnumerateWithWordlist(domain string, wordlist []string) ([]EnumerationResult, error) {
+func (e *Enumerator) EnumerateWithWordlist(ctx context.Context, domain string, wordlist []string) ([]EnumerationResult, error) {
 	var results []EnumerationResult
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -102,12 +103,12 @@ func (e *Enumerator) EnumerateWithWordlist(domain string, wordlist []string) ([]
 		return nil, fmt.Errorf("invalid domain: %s", domain)
 	}
 
-	wildcardIPs := e.detectWildcard(domain)
+	wildcardIPs := e.detectWildcard(ctx, domain)
 
 	checked := make(map[string]bool)
 	var checkedMu sync.Mutex
 
-	tryLookup := func(host string) {
+	tryLookup := func(ctx context.Context, host string) {
 		checkedMu.Lock()
 		if checked[host] {
 			checkedMu.Unlock()
@@ -117,9 +118,9 @@ func (e *Enumerator) EnumerateWithWordlist(domain string, wordlist []string) ([]
 		checkedMu.Unlock()
 
 		fullHost := host + "." + domain
-		ctx, cancel := context.WithTimeout(context.Background(), e.timeout)
+		lCtx, cancel := context.WithTimeout(ctx, e.timeout)
 		defer cancel()
-		addrs, err := e.resolver.LookupIPAddr(ctx, fullHost)
+		addrs, err := e.resolver.LookupIPAddr(lCtx, fullHost)
 		if err != nil {
 			return
 		}
@@ -144,7 +145,7 @@ func (e *Enumerator) EnumerateWithWordlist(domain string, wordlist []string) ([]
 		go func() {
 			defer wg.Done()
 			for host := range processQueue {
-				tryLookup(host)
+				tryLookup(ctx, host)
 			}
 		}()
 	}
@@ -155,9 +156,9 @@ func (e *Enumerator) EnumerateWithWordlist(domain string, wordlist []string) ([]
 	close(processQueue)
 	wg.Wait()
 
-	ctx, cancel := context.WithTimeout(context.Background(), e.timeout)
+	apexCtx, cancel := context.WithTimeout(ctx, e.timeout)
 	defer cancel()
-	addrs, err := e.resolver.LookupIPAddr(ctx, domain)
+	addrs, err := e.resolver.LookupIPAddr(apexCtx, domain)
 	if err == nil && len(addrs) > 0 {
 		for _, addr := range addrs {
 			mu.Lock()
@@ -173,12 +174,12 @@ func (e *Enumerator) EnumerateWithWordlist(domain string, wordlist []string) ([]
 	return results, nil
 }
 
-func (e *Enumerator) detectWildcard(domain string) map[string]bool {
+func (e *Enumerator) detectWildcard(ctx context.Context, domain string) map[string]bool {
 	wildcardIPs := make(map[string]bool)
 	for i := 0; i < 3; i++ {
 		random := fmt.Sprintf("%s-wildcard-check-%d.%s", randomString(12), i, domain)
-		ctx, cancel := context.WithTimeout(context.Background(), e.timeout)
-		addrs, err := e.resolver.LookupIPAddr(ctx, random)
+		wCtx, cancel := context.WithTimeout(ctx, e.timeout)
+		addrs, err := e.resolver.LookupIPAddr(wCtx, random)
 		cancel()
 		if err != nil {
 			continue
@@ -192,10 +193,10 @@ func (e *Enumerator) detectWildcard(domain string) map[string]bool {
 
 func randomString(n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyz"
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	b := make([]byte, n)
 	for i := range b {
-		b[i] = letters[r.Intn(len(letters))]
+		idx, _ := rand.Int(rand.Reader, big.NewInt(int64(len(letters))))
+		b[i] = letters[idx.Int64()]
 	}
 	return string(b)
 }
@@ -212,9 +213,13 @@ func GetARecords(domain string) ([]net.IP, error) {
 	return ResolveHostname(domain)
 }
 
+const dnsTimeout = 10 * time.Second
+
 func GetNSRecords(domain string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), dnsTimeout)
+	defer cancel()
 	resolver := &net.Resolver{PreferGo: true}
-	nsRecords, err := resolver.LookupNS(context.Background(), domain)
+	nsRecords, err := resolver.LookupNS(ctx, domain)
 	if err != nil {
 		return nil, err
 	}
@@ -226,8 +231,10 @@ func GetNSRecords(domain string) ([]string, error) {
 }
 
 func GetMXRecords(domain string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), dnsTimeout)
+	defer cancel()
 	resolver := &net.Resolver{PreferGo: true}
-	mxRecords, err := resolver.LookupMX(context.Background(), domain)
+	mxRecords, err := resolver.LookupMX(ctx, domain)
 	if err != nil {
 		return nil, err
 	}
@@ -239,8 +246,10 @@ func GetMXRecords(domain string) ([]string, error) {
 }
 
 func GetTXTRecords(domain string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), dnsTimeout)
+	defer cancel()
 	resolver := &net.Resolver{PreferGo: true}
-	txtRecords, err := resolver.LookupTXT(context.Background(), domain)
+	txtRecords, err := resolver.LookupTXT(ctx, domain)
 	if err != nil {
 		return nil, err
 	}
@@ -248,8 +257,10 @@ func GetTXTRecords(domain string) ([]string, error) {
 }
 
 func GetCNAMERecords(alias string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), dnsTimeout)
+	defer cancel()
 	resolver := &net.Resolver{PreferGo: true}
-	cname, err := resolver.LookupCNAME(context.Background(), alias)
+	cname, err := resolver.LookupCNAME(ctx, alias)
 	if err != nil {
 		return "", err
 	}

@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -14,13 +15,17 @@ type Checkpoint struct {
 	dirty    bool
 }
 
-func NewCheckpoint(path string) *Checkpoint {
+func NewCheckpoint(path string) (*Checkpoint, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("invalid checkpoint path: %w", err)
+	}
 	cp := &Checkpoint{
-		filePath: path,
+		filePath: abs,
 		Progress: make(map[string]map[int]bool),
 	}
 	cp.Load()
-	return cp
+	return cp, nil
 }
 
 func (c *Checkpoint) Load() error {

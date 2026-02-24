@@ -8,7 +8,7 @@ import (
 
 type DNSCache struct {
 	entries map[string]cacheEntry
-	mu      sync.RWMutex
+	mu      sync.Mutex
 	ttl     time.Duration
 }
 
@@ -25,29 +25,28 @@ func NewDNSCache(ttl time.Duration) *DNSCache {
 }
 
 func (c *DNSCache) Lookup(host string) ([]net.IP, error) {
-	c.mu.RLock()
+	c.mu.Lock()
 	entry, exists := c.entries[host]
-	c.mu.RUnlock()
-
 	if exists && time.Now().Before(entry.expires) {
+		c.mu.Unlock()
 		return entry.ips, nil
 	}
-
 	if exists {
-		c.mu.Lock()
 		delete(c.entries, host)
-		c.mu.Unlock()
 	}
+	c.mu.Unlock()
 
 	ips, err := net.LookupIP(host)
 	if err != nil {
 		return nil, err
 	}
+
 	c.mu.Lock()
 	c.entries[host] = cacheEntry{
 		ips:     ips,
 		expires: time.Now().Add(c.ttl),
 	}
 	c.mu.Unlock()
+
 	return ips, nil
 }
