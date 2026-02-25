@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"strconv"
@@ -338,6 +339,7 @@ func main() {
 		defer jsonlWriter.Close()
 	}
 
+	hostnameFor := make(map[string]string)
 	var allIPs []string
 	for _, host := range hosts {
 		ips, err := dnsCache.Lookup(host)
@@ -346,7 +348,11 @@ func main() {
 			continue
 		}
 		for _, ip := range ips {
-			allIPs = append(allIPs, ip.String())
+			s := ip.String()
+			allIPs = append(allIPs, s)
+			if net.ParseIP(host) == nil {
+				hostnameFor[s] = host
+			}
 		}
 	}
 
@@ -487,6 +493,11 @@ func main() {
 						endpoints, appFP = scanner.Crawl(ctx, scanner.HTTPScheme(fp.TLS), ip, port, cfg.Scan.CrawlDepth, cfg.Scan.Timeout, 100*time.Millisecond)
 					}
 
+					var secHeaders []scanner.HeaderFinding
+					if scanner.IsHTTPService(fp.Service, port, fp.TLS) {
+						secHeaders = scanner.InspectHeaders(ctx, scanner.HTTPScheme(fp.TLS), ip, hostnameFor[ip], port, cfg.Scan.Timeout)
+					}
+
 					resultsCh <- scanner.ScanResult{
 						Host:            ip,
 						Port:            port,
@@ -499,6 +510,7 @@ func main() {
 						Vulnerabilities: vulns,
 						Endpoints:       endpoints,
 						App:             appFP,
+						SecurityHeaders: secHeaders,
 					}
 					checkpoint.Save(ip, port)
 					return
@@ -514,22 +526,28 @@ func main() {
 
 				var endpoints []scanner.CrawlResult
 				var appFP *scanner.AppFingerprint
+				hasTLS := tlsResult != nil || port == 443 || port == 8443 || port == 4443
 				if *crawlFlag && scanner.IsHTTPService(svc.Name, port, tlsResult != nil) {
-					hasTLS := tlsResult != nil || port == 443 || port == 8443 || port == 4443
 					endpoints, appFP = scanner.Crawl(ctx, scanner.HTTPScheme(hasTLS), ip, port, cfg.Scan.CrawlDepth, cfg.Scan.Timeout, 100*time.Millisecond)
 				}
 
+				var secHeaders []scanner.HeaderFinding
+				if scanner.IsHTTPService(svc.Name, port, tlsResult != nil) {
+					secHeaders = scanner.InspectHeaders(ctx, scanner.HTTPScheme(hasTLS), ip, hostnameFor[ip], port, cfg.Scan.Timeout)
+				}
+
 				resultsCh <- scanner.ScanResult{
-					Host:      ip,
-					Port:      port,
-					Protocol:  "tcp",
-					Service:   svc.Name,
-					Version:   svc.Version,
-					Banner:    svc.Banner,
-					CDN:       cdn,
-					TLS:       tlsResult,
-					Endpoints: endpoints,
-					App:       appFP,
+					Host:            ip,
+					Port:            port,
+					Protocol:        "tcp",
+					Service:         svc.Name,
+					Version:         svc.Version,
+					Banner:          svc.Banner,
+					CDN:             cdn,
+					TLS:             tlsResult,
+					Endpoints:       endpoints,
+					App:             appFP,
+					SecurityHeaders: secHeaders,
 				}
 				checkpoint.Save(ip, port)
 			}(ip, port)
@@ -609,6 +627,7 @@ func main() {
 		fmt.Print("                \r")
 		if err == nil {
 			fmt.Println()
+			fmt.Printf("\033[2m  ──────────────\033[0m \033[1m\033[36mAI Analysis\033[0m \033[2m──────────────\033[0m\n\n")
 			printAnalysis(brief)
 			fmt.Println("\033[2m  Powered by Together AI (deepseek-ai/DeepSeek-V3.1)\033[0m")
 			fmt.Println()
@@ -621,6 +640,7 @@ func main() {
 			slog.Error("analysis failed", "err", err)
 		} else {
 			fmt.Println()
+			fmt.Printf("\033[2m  ──────────────\033[0m \033[1m\033[36mAI Analysis\033[0m \033[2m──────────────\033[0m\n\n")
 			printAnalysis(analysis.Analysis)
 			fmt.Println("\033[2m  Powered by Together AI (deepseek-ai/DeepSeek-V3.1)\033[0m")
 			fmt.Println()
@@ -708,6 +728,14 @@ func printResult(res scanner.ScanResult) {
 		if len(parts) > 0 {
 			fmt.Printf("  %sapp%s  %s\n", cyan, reset, strings.Join(parts, "  ·  "))
 		}
+	}
+
+	for _, f := range res.SecurityHeaders {
+		color := yellow
+		if f.Severity == "HIGH" {
+			color = red
+		}
+		fmt.Printf("  %s✗  %s%s  %s\n", color, f.Header, reset, f.Detail)
 	}
 
 	for _, cve := range res.Vulnerabilities {

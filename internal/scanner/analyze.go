@@ -27,10 +27,12 @@ type AnalysisUsage struct {
 	TotalTokens      int64 `json:"total_tokens"`
 }
 
-const briefSystemPrompt = `You are a security expert. Summarize the scan results in 3-5 bullet points.
-Focus only on the most critical/high severity issues and quick wins.
-For unknown or unidentified services, analyze the port number itself -- ports have well-known security associations (e.g., 31337 = Back Orifice/elite malware, 4444 = Metasploit default, 9929 = nping-echo, 1337, 6666, etc.). Flag any suspicious or non-standard ports explicitly.
-Be terse and actionable. No preamble or closing remarks.`
+const briefSystemPrompt = `You are a security expert. Summarize the scan results in 5-7 bullet points:
+- Lead with critical/high severity findings; include a one-line remediation for each
+- Cover medium severity issues (missing headers, weak TLS, exposed admin interfaces, version disclosure)
+- Flag suspicious or non-standard ports by number -- apply known associations (31337 = Back Orifice, 4444 = Metasploit, 9929 = nping-echo, 6666 = IRC/malware)
+- Close with one sentence on overall risk posture
+Each bullet: what it is, why it matters, what to do. No preamble.`
 
 const systemPrompt = `You are a security expert analyzing network scan results. For each finding, provide:
 
@@ -190,6 +192,13 @@ func buildSummary(results []ScanResult) string {
 
 		if len(r.Vulnerabilities) > 0 {
 			fmt.Fprintf(&b, "  CVEs: %s\n", strings.Join(r.Vulnerabilities, ", "))
+		}
+
+		if len(r.SecurityHeaders) > 0 {
+			fmt.Fprintf(&b, "  Security header findings:\n")
+			for _, f := range r.SecurityHeaders {
+				fmt.Fprintf(&b, "    [%s] %s: %s\n", f.Severity, f.Header, f.Detail)
+			}
 		}
 
 		if r.App != nil {
