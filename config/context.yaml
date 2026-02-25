@@ -1,0 +1,18 @@
+assets:
+  api.together.xyz:
+    role: production API gateway
+    criticality: high
+    data: user API keys, model inference requests, billing data
+  api.together.ai:
+    role: production API gateway
+    criticality: high
+    data: user API keys, model inference requests, billing data
+  scanme.nmap.org:
+    role: intentionally vulnerable test target
+    criticality: low
+    data: none - public test server, treat all findings as real vulnerabilities
+
+policies:
+  tls_min_version: "1.2"
+  ssh_password_auth: false
+  allowed_ports: [80, 443]

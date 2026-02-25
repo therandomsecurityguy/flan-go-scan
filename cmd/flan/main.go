@@ -58,6 +58,7 @@ CONFIGURATION:
   --udp                    enable UDP scanning (ports 53,123,161,500 by default)
   --crawl                  crawl HTTP/HTTPS services for endpoints and sensitive paths
   --crawl-depth int        max crawl depth (default: 2)
+  --context string         YAML file with asset context and policies for AI analysis
   --analyze                AI-powered analysis via Together API (requires TOGETHER_API_KEY)
 
 OUTPUT:
@@ -150,6 +151,7 @@ func main() {
 	udpFlag := flag.Bool("udp", false, "")
 	crawlFlag := flag.Bool("crawl", false, "")
 	crawlDepth := flag.Int("crawl-depth", 0, "")
+	contextFile := flag.String("context", "", "")
 	analyze := flag.Bool("analyze", false, "")
 	jsonFlag := flag.Bool("json", false, "")
 	jsonlFlag := flag.Bool("jsonl", false, "")
@@ -175,6 +177,18 @@ func main() {
 
 	if set["crawl-depth"] && *crawlDepth > 0 {
 		cfg.Scan.CrawlDepth = *crawlDepth
+	}
+
+	var scanCtx *scanner.ScanContext
+	ctxPath := *contextFile
+	if ctxPath == "" {
+		ctxPath = "config/context.yaml"
+	}
+	if sc, err := scanner.LoadContext(ctxPath); err == nil {
+		scanCtx = sc
+	} else if *contextFile != "" {
+		slog.Error("failed to load context file", "err", err)
+		os.Exit(1)
 	}
 
 	if *passiveOnly && dom == "" {
@@ -495,7 +509,8 @@ func main() {
 
 					var secHeaders []scanner.HeaderFinding
 					if scanner.IsHTTPService(fp.Service, port, fp.TLS) {
-						secHeaders = scanner.InspectHeaders(ctx, scanner.HTTPScheme(fp.TLS), ip, hostnameFor[ip], port, cfg.Scan.Timeout)
+						isTLS := fp.TLS || port == 443 || port == 8443 || port == 4443
+						secHeaders = scanner.InspectHeaders(ctx, scanner.HTTPScheme(isTLS), ip, hostnameFor[ip], port, cfg.Scan.Timeout)
 					}
 
 					resultsCh <- scanner.ScanResult{
@@ -621,9 +636,31 @@ func main() {
 		"ports_scanned", progress.PortsScanned.Load(),
 	)
 
+	if scanCtx != nil && len(results) > 0 {
+		violations := scanner.CheckPolicies(results, scanCtx)
+		if len(violations) > 0 && prettyMode {
+			fmt.Println()
+			fmt.Printf("\033[2m  ──────────────\033[0m \033[1m\033[31mPolicy Violations\033[0m \033[2m──────────────\033[0m\n\n")
+			for _, v := range violations {
+				color := "\033[33m"
+				if v.Severity == "CRITICAL" {
+					color = "\033[1m\033[31m"
+				} else if v.Severity == "HIGH" {
+					color = "\033[31m"
+				}
+				loc := v.Host
+				if v.Port > 0 {
+					loc = fmt.Sprintf("%s:%d", v.Host, v.Port)
+				}
+				fmt.Printf("  %s[%s]%s  %s  %s\n", color, v.Severity, "\033[0m", loc, v.Detail)
+			}
+			fmt.Println()
+		}
+	}
+
 	if prettyMode && !*analyze && os.Getenv("TOGETHER_API_KEY") != "" && len(results) > 0 {
 		fmt.Print("\033[2m  Analyzing...\033[0m\r")
-		brief, err := scanner.AnalyzeBrief(ctx, results)
+		brief, err := scanner.AnalyzeBrief(ctx, results, scanCtx)
 		fmt.Print("                \r")
 		if err == nil {
 			fmt.Println()
@@ -635,7 +672,7 @@ func main() {
 	}
 
 	if *analyze && len(results) > 0 {
-		analysis, err := scanner.Analyze(ctx, results, cfg.Output.Directory)
+		analysis, err := scanner.Analyze(ctx, results, cfg.Output.Directory, scanCtx)
 		if err != nil {
 			slog.Error("analysis failed", "err", err)
 		} else {

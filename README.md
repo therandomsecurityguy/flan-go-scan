@@ -128,6 +128,14 @@ Scan with detailed AI-powered analysis (requires `TOGETHER_API_KEY`):
 flan -t scanme.nmap.org --analyze
 ```
 
+Use a custom asset context file for policy-aware AI analysis:
+
+```
+flan -t api.example.com --context /path/to/context.yaml
+```
+
+Context is automatically loaded from `config/context.yaml` when present. It defines asset criticality, data classification, and security policies (TLS minimum version, SSH auth requirements, allowed ports). Policy violations are flagged before AI analysis runs.
+
 ## Flags
 
 | Flag | Description |
@@ -145,6 +153,7 @@ flan -t scanme.nmap.org --analyze
 | `--udp` | Enable UDP scanning (ports 53, 123, 161, 500 by default) |
 | `--crawl` | Crawl HTTP/HTTPS services for endpoints, sensitive paths, and app fingerprinting |
 | `--crawl-depth` | Max crawl depth (default: 2) |
+| `--context` | Asset context YAML file (auto-loads `config/context.yaml` if present) |
 | `--analyze` | Detailed AI security analysis via Together API (requires `TOGETHER_API_KEY`) |
 | `--json` | JSON output |
 | `--jsonl` | JSONL streaming output |

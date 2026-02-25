@@ -17,33 +17,27 @@ type HeaderFinding struct {
 }
 
 func InspectHeaders(ctx context.Context, scheme, ip, hostname string, port int, timeout time.Duration) []HeaderFinding {
-	displayHost := ip
-	if strings.Contains(ip, ":") {
-		displayHost = "[" + ip + "]"
+	urlHost := ip
+	if hostname != "" {
+		urlHost = hostname
+	} else if strings.Contains(ip, ":") {
+		urlHost = "[" + ip + "]"
 	}
-	target := fmt.Sprintf("%s://%s:%d/", scheme, displayHost, port)
+	target := fmt.Sprintf("%s://%s:%d/", scheme, urlHost, port)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil
 	}
-	host := ip
-	if hostname != "" {
-		host = hostname
-	}
-	req.Host = host
 	req.Header.Set("User-Agent", "flan-scanner/1.0")
 
 	client := &http.Client{
 		Timeout: timeout * 2,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true, ServerName: host}, //nolint:gosec
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
 		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 2 {
-				return http.ErrUseLastResponse
-			}
-			return nil
+			return http.ErrUseLastResponse
 		},
 	}
 
@@ -61,24 +55,27 @@ func InspectHeaders(ctx context.Context, scheme, ip, hostname string, port int, 
 	}
 
 	h := resp.Header
+	isHTTPRedirect := scheme == "http" && resp.StatusCode >= 300 && resp.StatusCode < 400
 
-	if scheme == "https" && h.Get("Strict-Transport-Security") == "" {
-		check("Strict-Transport-Security", "HIGH", "missing HSTS header; browsers may connect over HTTP")
-	}
-	if h.Get("Content-Security-Policy") == "" {
-		check("Content-Security-Policy", "MEDIUM", "missing CSP; XSS and injection attacks not mitigated")
-	}
-	if h.Get("X-Frame-Options") == "" && h.Get("Content-Security-Policy") == "" {
-		check("X-Frame-Options", "MEDIUM", "missing; page may be embedded in iframes (clickjacking risk)")
-	}
-	if h.Get("X-Content-Type-Options") == "" {
-		check("X-Content-Type-Options", "LOW", "missing; MIME sniffing enabled")
-	}
-	if h.Get("Referrer-Policy") == "" {
-		check("Referrer-Policy", "LOW", "missing; full URL may be sent as Referer to third parties")
-	}
-	if h.Get("Permissions-Policy") == "" {
-		check("Permissions-Policy", "LOW", "missing; browser features (camera, mic, geolocation) unrestricted")
+	if !isHTTPRedirect {
+		if scheme == "https" && h.Get("Strict-Transport-Security") == "" {
+			check("Strict-Transport-Security", "HIGH", "missing HSTS header; browsers may connect over HTTP")
+		}
+		if h.Get("Content-Security-Policy") == "" {
+			check("Content-Security-Policy", "MEDIUM", "missing CSP; XSS and injection attacks not mitigated")
+		}
+		if h.Get("X-Frame-Options") == "" && h.Get("Content-Security-Policy") == "" {
+			check("X-Frame-Options", "MEDIUM", "missing; page may be embedded in iframes (clickjacking risk)")
+		}
+		if h.Get("X-Content-Type-Options") == "" {
+			check("X-Content-Type-Options", "LOW", "missing; MIME sniffing enabled")
+		}
+		if h.Get("Referrer-Policy") == "" {
+			check("Referrer-Policy", "LOW", "missing; full URL may be sent as Referer to third parties")
+		}
+		if h.Get("Permissions-Policy") == "" {
+			check("Permissions-Policy", "LOW", "missing; browser features (camera, mic, geolocation) unrestricted")
+		}
 	}
 
 	if sv := h.Get("Server"); sv != "" && containsVersion(sv) {
