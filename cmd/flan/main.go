@@ -55,6 +55,8 @@ CONFIGURATION:
   --passive-only           skip brute-force, use passive sources only
   --scan-cdn               scan all ports on CDN hosts (default: 80,443 only)
   --udp                    enable UDP scanning (ports 53,123,161,500 by default)
+  --crawl                  crawl HTTP/HTTPS services for endpoints and sensitive paths
+  --crawl-depth int        max crawl depth (default: 2)
   --analyze                AI-powered analysis via Together API (requires TOGETHER_API_KEY)
 
 OUTPUT:
@@ -145,6 +147,8 @@ func main() {
 	passiveOnly := flag.Bool("passive-only", false, "")
 	scanCDN := flag.Bool("scan-cdn", false, "")
 	udpFlag := flag.Bool("udp", false, "")
+	crawlFlag := flag.Bool("crawl", false, "")
+	crawlDepth := flag.Int("crawl-depth", 0, "")
 	analyze := flag.Bool("analyze", false, "")
 	jsonFlag := flag.Bool("json", false, "")
 	jsonlFlag := flag.Bool("jsonl", false, "")
@@ -168,6 +172,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	if set["crawl-depth"] && *crawlDepth > 0 {
+		cfg.Scan.CrawlDepth = *crawlDepth
+	}
+
 	if *passiveOnly && dom == "" {
 		slog.Warn("--passive-only has no effect without -d")
 	}
@@ -180,6 +188,16 @@ func main() {
 	}
 	if *csvFlag {
 		cfg.Output.Format = "csv"
+	}
+
+	fi, _ := os.Stdout.Stat()
+	isTTY := (fi.Mode() & os.ModeCharDevice) != 0
+	prettyMode := isTTY && !*jsonFlag && !*jsonlFlag && !*csvFlag
+	if prettyMode {
+		if cfg.Output.Directory == "-" {
+			cfg.Output.Directory = "reports"
+		}
+		cfg.Output.Format = "jsonl"
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -384,7 +402,9 @@ func main() {
 		statsInterval = cfg.Scan.StatsInterval
 	}
 	progressCtx, stopProgress := context.WithCancel(ctx)
-	go progress.Run(progressCtx, time.Duration(statsInterval)*time.Second)
+	if !prettyMode {
+		go progress.Run(progressCtx, time.Duration(statsInterval)*time.Second)
+	}
 
 	resultsCh := make(chan scanner.ScanResult, 100)
 	var collectWg sync.WaitGroup
@@ -399,7 +419,10 @@ func main() {
 					slog.Error("failed to write JSONL result", "err", err)
 				}
 			}
-			if jsonlWriter == nil || *analyze {
+			if prettyMode {
+				printResult(res)
+			}
+			if jsonlWriter == nil || *analyze || prettyMode {
 				results = append(results, res)
 			}
 		}
@@ -458,6 +481,12 @@ func main() {
 						}
 					}
 
+					var endpoints []scanner.CrawlResult
+					var appFP *scanner.AppFingerprint
+					if *crawlFlag && scanner.IsHTTPService(fp.Service, port, fp.TLS) {
+						endpoints, appFP = scanner.Crawl(ctx, scanner.HTTPScheme(fp.TLS), ip, port, cfg.Scan.CrawlDepth, cfg.Scan.Timeout, 100*time.Millisecond)
+					}
+
 					resultsCh <- scanner.ScanResult{
 						Host:            ip,
 						Port:            port,
@@ -468,6 +497,8 @@ func main() {
 						TLS:             tlsResult,
 						Metadata:        fp.Metadata,
 						Vulnerabilities: vulns,
+						Endpoints:       endpoints,
+						App:             appFP,
 					}
 					checkpoint.Save(ip, port)
 					return
@@ -480,15 +511,25 @@ func main() {
 
 				progress.ServicesFound.Add(1)
 				tlsResult := scanner.InspectTLS(ctx, ip, port, cfg.Scan.Timeout)
+
+				var endpoints []scanner.CrawlResult
+				var appFP *scanner.AppFingerprint
+				if *crawlFlag && scanner.IsHTTPService(svc.Name, port, tlsResult != nil) {
+					hasTLS := tlsResult != nil || port == 443 || port == 8443 || port == 4443
+					endpoints, appFP = scanner.Crawl(ctx, scanner.HTTPScheme(hasTLS), ip, port, cfg.Scan.CrawlDepth, cfg.Scan.Timeout, 100*time.Millisecond)
+				}
+
 				resultsCh <- scanner.ScanResult{
-					Host:     ip,
-					Port:     port,
-					Protocol: "tcp",
-					Service:  svc.Name,
-					Version:  svc.Version,
-					Banner:   svc.Banner,
-					CDN:      cdn,
-					TLS:      tlsResult,
+					Host:      ip,
+					Port:      port,
+					Protocol:  "tcp",
+					Service:   svc.Name,
+					Version:   svc.Version,
+					Banner:    svc.Banner,
+					CDN:       cdn,
+					TLS:       tlsResult,
+					Endpoints: endpoints,
+					App:       appFP,
 				}
 				checkpoint.Save(ip, port)
 			}(ip, port)
@@ -562,6 +603,18 @@ func main() {
 		"ports_scanned", progress.PortsScanned.Load(),
 	)
 
+	if prettyMode && !*analyze && os.Getenv("TOGETHER_API_KEY") != "" && len(results) > 0 {
+		fmt.Print("\033[2m  Analyzing...\033[0m\r")
+		brief, err := scanner.AnalyzeBrief(ctx, results)
+		fmt.Print("                \r")
+		if err == nil {
+			fmt.Println()
+			printAnalysis(brief)
+			fmt.Println("\033[2m  Powered by Together AI (deepseek-ai/DeepSeek-V3.1)\033[0m")
+			fmt.Println()
+		}
+	}
+
 	if *analyze && len(results) > 0 {
 		analysis, err := scanner.Analyze(ctx, results, cfg.Output.Directory)
 		if err != nil {
@@ -606,6 +659,77 @@ func main() {
 			fmt.Printf("%s:%d [%s %s] TLS:%v %s\n", res.Host, res.Port, res.Service, res.Version, res.TLS != nil, res.Banner)
 		}
 	}
+}
+
+func printResult(res scanner.ScanResult) {
+	const (
+		bold   = "\033[1m"
+		dim    = "\033[2m"
+		red    = "\033[31m"
+		yellow = "\033[33m"
+		green  = "\033[32m"
+		cyan   = "\033[36m"
+		reset  = "\033[0m"
+	)
+
+	tls := ""
+	if res.TLS != nil {
+		tls = dim + "  " + res.TLS.Version + reset
+		if res.TLS.Expired {
+			tls += red + " (expired)" + reset
+		}
+	}
+
+	version := ""
+	if res.Version != "" {
+		version = "  " + res.Version
+	}
+
+	fmt.Printf("%s%-21s%s  %s%-10s%s%s%s\n",
+		bold+cyan, fmt.Sprintf("%s:%d", res.Host, res.Port), reset,
+		cyan, res.Service, reset,
+		version, tls,
+	)
+
+	if res.App != nil {
+		var parts []string
+		if res.App.Server != "" {
+			parts = append(parts, res.App.Server)
+		}
+		if res.App.PoweredBy != "" {
+			parts = append(parts, res.App.PoweredBy)
+		}
+		if res.App.Generator != "" {
+			parts = append(parts, res.App.Generator)
+		}
+		if len(res.App.Apps) > 0 {
+			parts = append(parts, strings.Join(res.App.Apps, ", "))
+		}
+		if len(parts) > 0 {
+			fmt.Printf("  %sapp%s  %s\n", cyan, reset, strings.Join(parts, "  ·  "))
+		}
+	}
+
+	for _, cve := range res.Vulnerabilities {
+		fmt.Printf("  %s⚠  %s%s\n", red, cve, reset)
+	}
+
+	for _, ep := range res.Endpoints {
+		if ep.StatusCode == 404 {
+			continue
+		}
+		statusColor := green
+		if ep.StatusCode >= 300 {
+			statusColor = yellow
+		}
+		title := ""
+		if ep.Title != "" {
+			title = dim + "  \"" + ep.Title + "\"" + reset
+		}
+		fmt.Printf("  %s%d%s  %-32s%s\n", statusColor, ep.StatusCode, reset, ep.Path, title)
+	}
+
+	fmt.Println()
 }
 
 func printAnalysis(text string) {

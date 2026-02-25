@@ -17,6 +17,7 @@ type Config struct {
 		StatsInterval int           `mapstructure:"stats_interval"`
 		UDP           bool          `mapstructure:"udp"`
 		UDPPorts      string        `mapstructure:"udp_ports"`
+		CrawlDepth    int           `mapstructure:"crawl_depth"`
 	} `mapstructure:"scan"`
 	DNS struct {
 		TTL time.Duration `mapstructure:"ttl"`
@@ -40,6 +41,7 @@ func defaults() *Config {
 	cfg.Scan.StatsInterval = 5
 	cfg.Scan.UDP = false
 	cfg.Scan.UDPPorts = "53,123,161,500"
+	cfg.Scan.CrawlDepth = 2
 	cfg.DNS.TTL = 10 * time.Minute
 	cfg.Output.Format = "jsonl"
 	cfg.Output.Directory = "-"
