@@ -13,4 +13,6 @@ type ScanResult struct {
 	TLS             *TLSResult      `json:"tls,omitempty"`
 	Metadata        json.RawMessage `json:"metadata,omitempty"`
 	Vulnerabilities []string        `json:"vulnerabilities,omitempty"`
+	Endpoints       []CrawlResult   `json:"endpoints,omitempty"`
+	App             *AppFingerprint `json:"app,omitempty"`
 }

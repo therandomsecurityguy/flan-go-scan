@@ -15,10 +15,10 @@ import (
 )
 
 type AnalysisResult struct {
-	Timestamp string          `json:"timestamp"`
-	Model     string          `json:"model"`
-	Analysis  string          `json:"analysis"`
-	Usage     *AnalysisUsage  `json:"usage,omitempty"`
+	Timestamp string         `json:"timestamp"`
+	Model     string         `json:"model"`
+	Analysis  string         `json:"analysis"`
+	Usage     *AnalysisUsage `json:"usage,omitempty"`
 }
 
 type AnalysisUsage struct {
@@ -26,6 +26,11 @@ type AnalysisUsage struct {
 	CompletionTokens int64 `json:"completion_tokens"`
 	TotalTokens      int64 `json:"total_tokens"`
 }
+
+const briefSystemPrompt = `You are a security expert. Summarize the scan results in 3-5 bullet points.
+Focus only on the most critical/high severity issues and quick wins.
+For unknown or unidentified services, analyze the port number itself -- ports have well-known security associations (e.g., 31337 = Back Orifice/elite malware, 4444 = Metasploit default, 9929 = nping-echo, 1337, 6666, etc.). Flag any suspicious or non-standard ports explicitly.
+Be terse and actionable. No preamble or closing remarks.`
 
 const systemPrompt = `You are a security expert analyzing network scan results. For each finding, provide:
 
@@ -40,6 +45,7 @@ Prioritize findings by risk. Be concise and actionable. Focus on:
 - Missing security headers
 - Password authentication enabled on SSH
 - Default credentials risk
+- Unknown or unidentified services: analyze the port number itself for well-known associations (e.g., 31337 = Back Orifice/elite malware, 4444 = Metasploit, 9929 = nping-echo, 6666 = IRC/malware, 1337, etc.) and flag suspicious ports explicitly
 
 Do not repeat raw scan data. Summarize and analyze.`
 
@@ -110,6 +116,47 @@ func Analyze(ctx context.Context, results []ScanResult, outputDir string) (*Anal
 	return analysis, nil
 }
 
+func AnalyzeBrief(ctx context.Context, results []ScanResult) (string, error) {
+	apiKey := os.Getenv("TOGETHER_API_KEY")
+	if apiKey == "" {
+		return "", fmt.Errorf("TOGETHER_API_KEY not set")
+	}
+
+	client := together.NewClient(option.WithAPIKey(apiKey))
+	summary := buildSummary(results)
+
+	resp, err := client.Chat.Completions.New(ctx, together.ChatCompletionNewParams{
+		Model: "deepseek-ai/DeepSeek-V3.1",
+		Messages: []together.ChatCompletionNewParamsMessageUnion{
+			{
+				OfChatCompletionNewsMessageChatCompletionSystemMessageParam: &together.ChatCompletionNewParamsMessageChatCompletionSystemMessageParam{
+					Role:    "system",
+					Content: briefSystemPrompt,
+				},
+			},
+			{
+				OfChatCompletionNewsMessageChatCompletionUserMessageParam: &together.ChatCompletionNewParamsMessageChatCompletionUserMessageParam{
+					Role: "user",
+					Content: together.ChatCompletionNewParamsMessageChatCompletionUserMessageParamContentUnion{
+						OfString: together.String(fmt.Sprintf("Summarize:\n\n%s", summary)),
+					},
+				},
+			},
+		},
+		MaxTokens:   together.Int(400),
+		Temperature: together.Float(0.2),
+	})
+	if err != nil {
+		return "", fmt.Errorf("together API call failed: %w", err)
+	}
+
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("no response from model")
+	}
+
+	return resp.Choices[0].Message.Content, nil
+}
+
 func buildSummary(results []ScanResult) string {
 	var b strings.Builder
 
@@ -143,6 +190,35 @@ func buildSummary(results []ScanResult) string {
 
 		if len(r.Vulnerabilities) > 0 {
 			fmt.Fprintf(&b, "  CVEs: %s\n", strings.Join(r.Vulnerabilities, ", "))
+		}
+
+		if r.App != nil {
+			if r.App.Server != "" {
+				fmt.Fprintf(&b, "  Server: %s\n", r.App.Server)
+			}
+			if r.App.PoweredBy != "" {
+				fmt.Fprintf(&b, "  Powered-By: %s\n", r.App.PoweredBy)
+			}
+			if r.App.Generator != "" {
+				fmt.Fprintf(&b, "  Generator: %s\n", r.App.Generator)
+			}
+			if len(r.App.Apps) > 0 {
+				fmt.Fprintf(&b, "  Detected apps: %s\n", strings.Join(r.App.Apps, ", "))
+			}
+		}
+
+		if len(r.Endpoints) > 0 {
+			fmt.Fprintf(&b, "  Endpoints:\n")
+			for _, ep := range r.Endpoints {
+				fmt.Fprintf(&b, "    %d %s", ep.StatusCode, ep.Path)
+				if ep.Title != "" {
+					fmt.Fprintf(&b, " [%s]", ep.Title)
+				}
+				if ep.RedirectTo != "" {
+					fmt.Fprintf(&b, " -> %s", ep.RedirectTo)
+				}
+				b.WriteString("\n")
+			}
 		}
 
 		if r.Metadata != nil {
