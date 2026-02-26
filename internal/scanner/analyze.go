@@ -51,7 +51,7 @@ Prioritize findings by risk. Be concise and actionable. Focus on:
 
 Do not repeat raw scan data. Summarize and analyze.`
 
-func Analyze(ctx context.Context, results []ScanResult, outputDir string) (*AnalysisResult, error) {
+func Analyze(ctx context.Context, results []ScanResult, outputDir string, sc *ScanContext) (*AnalysisResult, error) {
 	apiKey := os.Getenv("TOGETHER_API_KEY")
 	if apiKey == "" {
 		return nil, fmt.Errorf("TOGETHER_API_KEY not set")
@@ -60,6 +60,9 @@ func Analyze(ctx context.Context, results []ScanResult, outputDir string) (*Anal
 	client := together.NewClient(option.WithAPIKey(apiKey))
 
 	summary := buildSummary(results)
+	if ctxSummary := BuildContextSummary(sc); ctxSummary != "" {
+		summary = ctxSummary + "\n" + summary
+	}
 	slog.Info("sending scan results to Together AI for analysis", "services", len(results))
 
 	resp, err := client.Chat.Completions.New(ctx, together.ChatCompletionNewParams{
@@ -118,7 +121,7 @@ func Analyze(ctx context.Context, results []ScanResult, outputDir string) (*Anal
 	return analysis, nil
 }
 
-func AnalyzeBrief(ctx context.Context, results []ScanResult) (string, error) {
+func AnalyzeBrief(ctx context.Context, results []ScanResult, sc *ScanContext) (string, error) {
 	apiKey := os.Getenv("TOGETHER_API_KEY")
 	if apiKey == "" {
 		return "", fmt.Errorf("TOGETHER_API_KEY not set")
@@ -126,6 +129,9 @@ func AnalyzeBrief(ctx context.Context, results []ScanResult) (string, error) {
 
 	client := together.NewClient(option.WithAPIKey(apiKey))
 	summary := buildSummary(results)
+	if ctxSummary := BuildContextSummary(sc); ctxSummary != "" {
+		summary = ctxSummary + "\n" + summary
+	}
 
 	resp, err := client.Chat.Completions.New(ctx, together.ChatCompletionNewParams{
 		Model: "deepseek-ai/DeepSeek-V3.1",
