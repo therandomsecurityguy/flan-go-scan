@@ -200,6 +200,16 @@ func buildSummary(results []ScanResult) string {
 			fmt.Fprintf(&b, "  CVEs: %s\n", strings.Join(r.Vulnerabilities, ", "))
 		}
 
+		if r.TLSEnum != nil {
+			fmt.Fprintf(&b, "  TLS versions supported: %s\n", strings.Join(r.TLSEnum.SupportedVersions, ", "))
+			if len(r.TLSEnum.WeakVersions) > 0 {
+				fmt.Fprintf(&b, "  Deprecated TLS versions: %s\n", strings.Join(r.TLSEnum.WeakVersions, ", "))
+			}
+			if len(r.TLSEnum.WeakCiphers) > 0 {
+				fmt.Fprintf(&b, "  Weak ciphers: %s\n", strings.Join(r.TLSEnum.WeakCiphers, ", "))
+			}
+		}
+
 		if len(r.SecurityHeaders) > 0 {
 			fmt.Fprintf(&b, "  Security header findings:\n")
 			for _, f := range r.SecurityHeaders {

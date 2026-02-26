@@ -153,6 +153,7 @@ Context is automatically loaded from `config/context.yaml` when present. It defi
 | `--udp` | Enable UDP scanning (ports 53, 123, 161, 500 by default) |
 | `--crawl` | Crawl HTTP/HTTPS services for endpoints, sensitive paths, and app fingerprinting |
 | `--crawl-depth` | Max crawl depth (default: 2) |
+| `--tls-enum` | Enumerate supported TLS versions and cipher suites (~60 connections per TLS port, off by default) |
 | `--context` | Asset context YAML file (auto-loads `config/context.yaml` if present) |
 | `--analyze` | Detailed AI security analysis via Together API (requires `TOGETHER_API_KEY`) |
 | `--json` | JSON output |
