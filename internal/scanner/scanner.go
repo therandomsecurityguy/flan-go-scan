@@ -16,4 +16,5 @@ type ScanResult struct {
 	Endpoints       []CrawlResult   `json:"endpoints,omitempty"`
 	App             *AppFingerprint `json:"app,omitempty"`
 	SecurityHeaders []HeaderFinding `json:"security_headers,omitempty"`
+	TLSEnum         *TLSEnum       `json:"tls_enum,omitempty"`
 }

@@ -58,6 +58,7 @@ CONFIGURATION:
   --udp                    enable UDP scanning (ports 53,123,161,500 by default)
   --crawl                  crawl HTTP/HTTPS services for endpoints and sensitive paths
   --crawl-depth int        max crawl depth (default: 2)
+  --tls-enum               enumerate supported TLS versions and cipher suites (~60 connections per TLS port)
   --context string         YAML file with asset context and policies for AI analysis
   --analyze                AI-powered analysis via Together API (requires TOGETHER_API_KEY)
 
@@ -151,6 +152,7 @@ func main() {
 	udpFlag := flag.Bool("udp", false, "")
 	crawlFlag := flag.Bool("crawl", false, "")
 	crawlDepth := flag.Int("crawl-depth", 0, "")
+	tlsEnumFlag := flag.Bool("tls-enum", false, "")
 	contextFile := flag.String("context", "", "")
 	analyze := flag.Bool("analyze", false, "")
 	jsonFlag := flag.Bool("json", false, "")
@@ -513,6 +515,11 @@ func main() {
 						secHeaders = scanner.InspectHeaders(ctx, scanner.HTTPScheme(isTLS), ip, hostnameFor[ip], port, cfg.Scan.Timeout)
 					}
 
+					var tlsEnum *scanner.TLSEnum
+					if *tlsEnumFlag && (fp.TLS || port == 443 || port == 8443 || port == 4443) {
+						tlsEnum = scanner.EnumerateTLS(ctx, ip, hostnameFor[ip], port, cfg.Scan.Timeout)
+					}
+
 					resultsCh <- scanner.ScanResult{
 						Host:            ip,
 						Port:            port,
@@ -526,6 +533,7 @@ func main() {
 						Endpoints:       endpoints,
 						App:             appFP,
 						SecurityHeaders: secHeaders,
+						TLSEnum:         tlsEnum,
 					}
 					checkpoint.Save(ip, port)
 					return
@@ -551,6 +559,11 @@ func main() {
 					secHeaders = scanner.InspectHeaders(ctx, scanner.HTTPScheme(hasTLS), ip, hostnameFor[ip], port, cfg.Scan.Timeout)
 				}
 
+				var tlsEnum *scanner.TLSEnum
+				if *tlsEnumFlag && hasTLS {
+					tlsEnum = scanner.EnumerateTLS(ctx, ip, hostnameFor[ip], port, cfg.Scan.Timeout)
+				}
+
 				resultsCh <- scanner.ScanResult{
 					Host:            ip,
 					Port:            port,
@@ -563,6 +576,7 @@ func main() {
 					Endpoints:       endpoints,
 					App:             appFP,
 					SecurityHeaders: secHeaders,
+					TLSEnum:         tlsEnum,
 				}
 				checkpoint.Save(ip, port)
 			}(ip, port)
@@ -638,21 +652,25 @@ func main() {
 
 	if scanCtx != nil && len(results) > 0 {
 		violations := scanner.CheckPolicies(results, scanCtx)
-		if len(violations) > 0 && prettyMode {
+		if prettyMode {
 			fmt.Println()
-			fmt.Printf("\033[2m  ──────────────\033[0m \033[1m\033[31mPolicy Violations\033[0m \033[2m──────────────\033[0m\n\n")
-			for _, v := range violations {
-				color := "\033[33m"
-				if v.Severity == "CRITICAL" {
-					color = "\033[1m\033[31m"
-				} else if v.Severity == "HIGH" {
-					color = "\033[31m"
+			if len(violations) > 0 {
+				fmt.Printf("\033[2m  ──────────────\033[0m \033[1m\033[31mPolicy Violations\033[0m \033[2m──────────────\033[0m\n\n")
+				for _, v := range violations {
+					color := "\033[33m"
+					if v.Severity == "CRITICAL" {
+						color = "\033[1m\033[31m"
+					} else if v.Severity == "HIGH" {
+						color = "\033[31m"
+					}
+					loc := v.Host
+					if v.Port > 0 {
+						loc = fmt.Sprintf("%s:%d", v.Host, v.Port)
+					}
+					fmt.Printf("  %s[%s]%s  %s  %s\n", color, v.Severity, "\033[0m", loc, v.Detail)
 				}
-				loc := v.Host
-				if v.Port > 0 {
-					loc = fmt.Sprintf("%s:%d", v.Host, v.Port)
-				}
-				fmt.Printf("  %s[%s]%s  %s  %s\n", color, v.Severity, "\033[0m", loc, v.Detail)
+			} else {
+				fmt.Printf("  \033[32m✓\033[0m  all policies satisfied\n")
 			}
 			fmt.Println()
 		}
@@ -767,16 +785,41 @@ func printResult(res scanner.ScanResult) {
 		}
 	}
 
-	for _, f := range res.SecurityHeaders {
-		color := yellow
-		if f.Severity == "HIGH" {
-			color = red
+	if res.TLSEnum != nil {
+		e := res.TLSEnum
+		fmt.Printf("  %stls versions%s  %s\n", cyan, reset, strings.Join(e.SupportedVersions, ", "))
+		if len(e.WeakVersions) > 0 {
+			fmt.Printf("  %s✗  deprecated: %s%s\n", yellow, strings.Join(e.WeakVersions, ", "), reset)
+		} else {
+			fmt.Printf("  %s✓  no deprecated versions%s\n", green, reset)
 		}
-		fmt.Printf("  %s✗  %s%s  %s\n", color, f.Header, reset, f.Detail)
+		if len(e.WeakCiphers) > 0 {
+			fmt.Printf("  %s✗  weak ciphers: %s%s\n", yellow, strings.Join(e.WeakCiphers, ", "), reset)
+		} else {
+			fmt.Printf("  %s✓  no weak ciphers%s\n", green, reset)
+		}
 	}
 
-	for _, cve := range res.Vulnerabilities {
-		fmt.Printf("  %s⚠  %s%s\n", red, cve, reset)
+	if scanner.IsHTTPService(res.Service, res.Port, res.TLS != nil) {
+		if len(res.SecurityHeaders) == 0 {
+			fmt.Printf("  %s✓  security headers OK%s\n", green, reset)
+		} else {
+			for _, f := range res.SecurityHeaders {
+				color := yellow
+				if f.Severity == "HIGH" {
+					color = red
+				}
+				fmt.Printf("  %s✗  %s%s  %s\n", color, f.Header, reset, f.Detail)
+			}
+		}
+	}
+
+	if len(res.Vulnerabilities) > 0 {
+		for _, cve := range res.Vulnerabilities {
+			fmt.Printf("  %s✗  %s%s\n", red, cve, reset)
+		}
+	} else if len(res.Metadata) > 0 {
+		fmt.Printf("  %s✓  no known CVEs%s\n", green, reset)
 	}
 
 	for _, ep := range res.Endpoints {
