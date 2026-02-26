@@ -59,6 +59,7 @@ CONFIGURATION:
   --crawl                  crawl HTTP/HTTPS services for endpoints and sensitive paths
   --crawl-depth int        max crawl depth (default: 2)
   --tls-enum               enumerate supported TLS versions and cipher suites (~60 connections per TLS port)
+  --asn                    look up ASN and organization for each host via Cymru DNS
   --context string         YAML file with asset context and policies for AI analysis
   --analyze                AI-powered analysis via Together API (requires TOGETHER_API_KEY)
 
@@ -153,6 +154,7 @@ func main() {
 	crawlFlag := flag.Bool("crawl", false, "")
 	crawlDepth := flag.Int("crawl-depth", 0, "")
 	tlsEnumFlag := flag.Bool("tls-enum", false, "")
+	asnFlag := flag.Bool("asn", false, "")
 	contextFile := flag.String("context", "", "")
 	analyze := flag.Bool("analyze", false, "")
 	jsonFlag := flag.Bool("json", false, "")
@@ -356,6 +358,9 @@ func main() {
 	}
 
 	hostnameFor := make(map[string]string)
+	asnFor := make(map[string]string)
+	orgFor := make(map[string]string)
+	ptrFor := make(map[string]string)
 	var allIPs []string
 	for _, host := range hosts {
 		ips, err := dnsCache.Lookup(host)
@@ -368,6 +373,16 @@ func main() {
 			allIPs = append(allIPs, s)
 			if net.ParseIP(host) == nil {
 				hostnameFor[s] = host
+			}
+			if *asnFlag {
+				asn, org := scanner.LookupASN(ctx, s, cfg.Scan.Timeout)
+				if asn != "" {
+					asnFor[s] = asn
+					orgFor[s] = org
+				}
+				if ptrs := scanner.LookupPTR(s); len(ptrs) > 0 {
+					ptrFor[s] = ptrs[0]
+				}
 			}
 		}
 	}
@@ -534,6 +549,9 @@ func main() {
 						App:             appFP,
 						SecurityHeaders: secHeaders,
 						TLSEnum:         tlsEnum,
+						Hostname:        ptrFor[ip],
+						ASN:             asnFor[ip],
+						Org:             orgFor[ip],
 					}
 					checkpoint.Save(ip, port)
 					return
@@ -577,6 +595,9 @@ func main() {
 					App:             appFP,
 					SecurityHeaders: secHeaders,
 					TLSEnum:         tlsEnum,
+					Hostname:        ptrFor[ip],
+					ASN:             asnFor[ip],
+					Org:             orgFor[ip],
 				}
 				checkpoint.Save(ip, port)
 			}(ip, port)
@@ -765,6 +786,21 @@ func printResult(res scanner.ScanResult) {
 		cyan, res.Service, reset,
 		version, tls,
 	)
+
+	if res.Hostname != "" || res.ASN != "" {
+		var meta []string
+		if res.Hostname != "" {
+			meta = append(meta, res.Hostname)
+		}
+		if res.ASN != "" {
+			label := "AS" + res.ASN
+			if res.Org != "" {
+				label += " " + res.Org
+			}
+			meta = append(meta, label)
+		}
+		fmt.Printf("  %sasn%s  %s\n", cyan, reset, strings.Join(meta, "  ·  "))
+	}
 
 	if res.App != nil {
 		var parts []string

@@ -200,6 +200,13 @@ func buildSummary(results []ScanResult) string {
 			fmt.Fprintf(&b, "  CVEs: %s\n", strings.Join(r.Vulnerabilities, ", "))
 		}
 
+		if r.Hostname != "" {
+			fmt.Fprintf(&b, "  PTR: %s\n", r.Hostname)
+		}
+		if r.ASN != "" {
+			fmt.Fprintf(&b, "  ASN: AS%s %s\n", r.ASN, r.Org)
+		}
+
 		if r.TLSEnum != nil {
 			fmt.Fprintf(&b, "  TLS versions supported: %s\n", strings.Join(r.TLSEnum.SupportedVersions, ", "))
 			if len(r.TLSEnum.WeakVersions) > 0 {
