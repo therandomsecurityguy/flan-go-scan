@@ -17,4 +17,7 @@ type ScanResult struct {
 	App             *AppFingerprint `json:"app,omitempty"`
 	SecurityHeaders []HeaderFinding `json:"security_headers,omitempty"`
 	TLSEnum         *TLSEnum       `json:"tls_enum,omitempty"`
+	Hostname        string         `json:"hostname,omitempty"`
+	ASN             string         `json:"asn,omitempty"`
+	Org             string         `json:"org,omitempty"`
 }
