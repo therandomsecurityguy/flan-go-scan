@@ -60,9 +60,13 @@ func CheckPolicies(results []ScanResult, sc *ScanContext) []PolicyViolation {
 	var violations []PolicyViolation
 
 	for _, r := range results {
+		host := r.Host
+		if r.Hostname != "" {
+			host = r.Hostname
+		}
 		if len(sc.Policies.AllowedPorts) > 0 && !allowedSet[r.Port] {
 			violations = append(violations, PolicyViolation{
-				Host:     r.Host,
+				Host:     host,
 				Port:     r.Port,
 				Severity: "HIGH",
 				Detail:   fmt.Sprintf("port %d not in allowed_ports policy", r.Port),
@@ -72,7 +76,7 @@ func CheckPolicies(results []ScanResult, sc *ScanContext) []PolicyViolation {
 		if r.TLS != nil && sc.Policies.TLSMinVersion != "" {
 			if v, ok := tlsOrder[r.TLS.Version]; ok && v < minRequired {
 				violations = append(violations, PolicyViolation{
-					Host:     r.Host,
+					Host:     host,
 					Port:     r.Port,
 					Severity: "HIGH",
 					Detail:   fmt.Sprintf("TLS %s below policy minimum %s", r.TLS.Version, sc.Policies.TLSMinVersion),
@@ -84,7 +88,7 @@ func CheckPolicies(results []ScanResult, sc *ScanContext) []PolicyViolation {
 			if strings.EqualFold(r.Service, "ssh") && r.Metadata != nil {
 				if strings.Contains(string(r.Metadata), `"passwordAuthEnabled":true`) {
 					violations = append(violations, PolicyViolation{
-						Host:     r.Host,
+						Host:     host,
 						Port:     r.Port,
 						Severity: "CRITICAL",
 						Detail:   "SSH password authentication enabled; policy requires key-based auth only",

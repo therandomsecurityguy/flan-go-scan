@@ -18,6 +18,7 @@ type ScanResult struct {
 	SecurityHeaders []HeaderFinding `json:"security_headers,omitempty"`
 	TLSEnum         *TLSEnum        `json:"tls_enum,omitempty"`
 	Hostname        string          `json:"hostname,omitempty"`
+	PTR             string          `json:"ptr,omitempty"`
 	ASN             string          `json:"asn,omitempty"`
 	Org             string          `json:"org,omitempty"`
 }

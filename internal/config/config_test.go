@@ -22,6 +22,12 @@ func TestLoadConfigMissingFileUsesDefaults(t *testing.T) {
 	if cfg.Output.Format != "jsonl" {
 		t.Fatalf("unexpected default output format: %s", cfg.Output.Format)
 	}
+	if cfg.Subdomain.PortProfile != "web" {
+		t.Fatalf("unexpected default subdomain port profile: %s", cfg.Subdomain.PortProfile)
+	}
+	if cfg.Subdomain.Threads != 10 {
+		t.Fatalf("unexpected default subdomain threads: %d", cfg.Subdomain.Threads)
+	}
 }
 
 func TestLoadConfigFromFileOverridesDefaults(t *testing.T) {
@@ -34,6 +40,10 @@ func TestLoadConfigFromFileOverridesDefaults(t *testing.T) {
 output:
   format: csv
   directory: ./out
+subdomain:
+  port_profile: full
+  all_sources: true
+  threads: 30
 `
 	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -57,5 +67,14 @@ output:
 	}
 	if cfg.Output.Directory != "./out" {
 		t.Fatalf("expected output directory override, got %s", cfg.Output.Directory)
+	}
+	if cfg.Subdomain.PortProfile != "full" {
+		t.Fatalf("expected subdomain port profile override, got %s", cfg.Subdomain.PortProfile)
+	}
+	if !cfg.Subdomain.AllSources {
+		t.Fatal("expected subdomain all_sources override to be true")
+	}
+	if cfg.Subdomain.Threads != 30 {
+		t.Fatalf("expected subdomain threads override, got %d", cfg.Subdomain.Threads)
 	}
 }

@@ -49,12 +49,22 @@ TARGET:
 PORTS:
   -p, -ports string        ports to scan (from config if not set)
   --top-ports string       use top port list: 100 or 1000
+  --subdomain-ports string domain mode port profile: web, standard, or full (default: web)
 
 CONFIGURATION:
   -c, -config string       path to config file (default "config/config.yaml")
   -w, -wordlist string     custom DNS subdomain wordlist file
   -r, -resolver string     custom DNS resolver (ip:port)
   --passive-only           skip brute-force, use passive sources only
+  --subdomains-only        print discovered subdomains and exit (subfinder-style)
+  --subfinder-sources string comma-separated passive sources override
+  --subfinder-exclude-sources string comma-separated passive sources to exclude
+  --subfinder-all          use all subfinder sources (can be slower)
+  --subfinder-recursive    use only recursive-capable passive sources
+  --subfinder-max-time int max passive enumeration time in minutes
+  --subfinder-rate-limit int passive enumeration HTTP requests/second
+  --subfinder-threads int  passive enumeration threads
+  --subfinder-provider-config string path to subfinder provider config
   --scan-cdn               scan all ports on CDN hosts (default: 80,443 only)
   --udp                    enable UDP scanning (ports 53,123,161,500 by default)
   --crawl                  crawl HTTP/HTTPS services for endpoints and sensitive paths
@@ -73,6 +83,7 @@ EXAMPLES:
   flan -t scanme.nmap.org
   flan -l targets.txt --top-ports 1000
   flan -d together.ai
+  flan -d together.ai --subdomains-only
   echo "10.0.0.0/24" | flan -l -
 
 `)
@@ -145,11 +156,21 @@ func main() {
 	portsFlag := flag.String("ports", "", "")
 	portsShort := flag.String("p", "", "")
 	topPorts := flag.String("top-ports", "", "")
+	subdomainPorts := flag.String("subdomain-ports", "", "")
 	wordlist := flag.String("wordlist", "", "")
 	wordlistShort := flag.String("w", "", "")
 	resolver := flag.String("resolver", "", "")
 	resolverShort := flag.String("r", "", "")
 	passiveOnly := flag.Bool("passive-only", false, "")
+	subdomainsOnly := flag.Bool("subdomains-only", false, "")
+	subfinderSources := flag.String("subfinder-sources", "", "")
+	subfinderExcludeSources := flag.String("subfinder-exclude-sources", "", "")
+	subfinderAll := flag.Bool("subfinder-all", false, "")
+	subfinderRecursive := flag.Bool("subfinder-recursive", false, "")
+	subfinderMaxTime := flag.Int("subfinder-max-time", 0, "")
+	subfinderRateLimit := flag.Int("subfinder-rate-limit", 0, "")
+	subfinderThreads := flag.Int("subfinder-threads", 0, "")
+	subfinderProviderConfig := flag.String("subfinder-provider-config", "", "")
 	scanCDN := flag.Bool("scan-cdn", false, "")
 	udpFlag := flag.Bool("udp", false, "")
 	crawlFlag := flag.Bool("crawl", false, "")
@@ -184,6 +205,10 @@ func main() {
 		cfg.Scan.CrawlDepth = *crawlDepth
 	}
 
+	if set["subdomain-ports"] {
+		cfg.Subdomain.PortProfile = *subdomainPorts
+	}
+
 	var scanCtx *scanner.ScanContext
 	ctxPath := *contextFile
 	if ctxPath == "" {
@@ -198,6 +223,14 @@ func main() {
 
 	if *passiveOnly && dom == "" {
 		slog.Warn("--passive-only has no effect without -d")
+	}
+	if *subdomainsOnly && dom == "" {
+		slog.Error("--subdomains-only requires -d/--domain")
+		os.Exit(1)
+	}
+	if *subdomainsOnly {
+		*passiveOnly = true
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	}
 
 	if *jsonFlag {
@@ -239,7 +272,40 @@ func main() {
 		slog.Info("enumerating subdomains", "domain", dom)
 
 		slog.Info("running passive enumeration")
-		passiveHosts, err := dns.PassiveEnumerate(ctx, dom, cfg.Scan.Timeout)
+		passiveOpts := dns.DefaultPassiveOptions(cfg.Scan.Timeout)
+		passiveOpts.Sources = splitCSV(cfg.Subdomain.Sources)
+		passiveOpts.ExcludeSources = splitCSV(cfg.Subdomain.ExcludeSources)
+		passiveOpts.AllSources = cfg.Subdomain.AllSources
+		passiveOpts.RecursiveOnly = cfg.Subdomain.RecursiveOnly
+		passiveOpts.MaxTimeMinutes = cfg.Subdomain.MaxTime
+		passiveOpts.RateLimit = cfg.Subdomain.RateLimit
+		passiveOpts.Threads = cfg.Subdomain.Threads
+		passiveOpts.ProviderConfig = cfg.Subdomain.ProviderConfig
+		if set["subfinder-sources"] {
+			passiveOpts.Sources = splitCSV(*subfinderSources)
+		}
+		if set["subfinder-exclude-sources"] {
+			passiveOpts.ExcludeSources = splitCSV(*subfinderExcludeSources)
+		}
+		if set["subfinder-all"] {
+			passiveOpts.AllSources = *subfinderAll
+		}
+		if set["subfinder-recursive"] {
+			passiveOpts.RecursiveOnly = *subfinderRecursive
+		}
+		if set["subfinder-max-time"] && *subfinderMaxTime > 0 {
+			passiveOpts.MaxTimeMinutes = *subfinderMaxTime
+		}
+		if set["subfinder-rate-limit"] && *subfinderRateLimit >= 0 {
+			passiveOpts.RateLimit = *subfinderRateLimit
+		}
+		if set["subfinder-threads"] && *subfinderThreads > 0 {
+			passiveOpts.Threads = *subfinderThreads
+		}
+		if set["subfinder-provider-config"] {
+			passiveOpts.ProviderConfig = strings.TrimSpace(*subfinderProviderConfig)
+		}
+		passiveHosts, err := dns.PassiveEnumerate(ctx, dom, passiveOpts)
 		if err != nil {
 			slog.Warn("passive enumeration failed", "err", err)
 		} else {
@@ -274,21 +340,25 @@ func main() {
 			}
 
 			for _, result := range enumResults {
-				hosts = append(hosts, result.IP.String())
+				if result.Hostname != "" {
+					hosts = append(hosts, result.Hostname)
+					continue
+				}
+				if result.IP != nil {
+					hosts = append(hosts, result.IP.String())
+				}
 			}
 			slog.Info("brute-force enumeration complete", "hosts", len(enumResults))
 		}
 
-		seen := make(map[string]bool)
-		var deduped []string
-		for _, h := range hosts {
-			if !seen[h] {
-				seen[h] = true
-				deduped = append(deduped, h)
-			}
-		}
-		hosts = deduped
+		hosts = normalizeDiscoveredHosts(hosts)
 		slog.Info("subdomain enumeration complete", "unique_hosts", len(hosts))
+		if *subdomainsOnly {
+			for _, host := range hosts {
+				fmt.Println(host)
+			}
+			return
+		}
 
 		nsRecords, err := dns.GetNSRecords(dom)
 		if err == nil && len(nsRecords) > 0 {
@@ -317,24 +387,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	var ports []int
-	switch *topPorts {
-	case "100":
-		ports = scanner.TopPorts100
-	case "1000":
-		ports = scanner.TopPorts1000
-	case "":
-		if portStr != "" {
-			ports, err = parsePorts(portStr)
-		} else {
-			ports, err = parsePorts(cfg.Scan.Ports)
-		}
-		if err != nil {
-			slog.Error("invalid port configuration", "err", err)
-			os.Exit(1)
-		}
-	default:
-		slog.Error("invalid --top-ports value, use 100 or 1000", "value", *topPorts)
+	ports, err := selectScanPorts(dom != "", set, *topPorts, portStr, cfg)
+	if err != nil {
+		slog.Error("invalid port configuration", "err", err)
 		os.Exit(1)
 	}
 
@@ -362,31 +417,31 @@ func main() {
 		defer jsonlWriter.Close()
 	}
 
-	allIPs, hostnameFor, asnFor, orgFor, ptrFor := resolveTargets(ctx, hosts, dnsCache, *asnFlag, cfg.Scan.Timeout, res)
+	targets := resolveTargets(ctx, hosts, dnsCache, *asnFlag, cfg.Scan.Timeout, res)
 
 	if cfg.Scan.Discovery && !udpEnabled {
-		allIPs = discoverAliveHosts(ctx, allIPs, ports, cfg.Scan.Workers, cfg.Scan.Timeout)
+		targets = discoverAliveTargets(ctx, targets, ports, cfg.Scan.Workers, cfg.Scan.Timeout)
 	} else if cfg.Scan.Discovery && udpEnabled {
-		slog.Info("skipping discovery filter for UDP mode to avoid dropping UDP-only hosts", "targets", len(allIPs))
+		slog.Info("skipping discovery filter for UDP mode to avoid dropping UDP-only hosts", "targets", len(targets))
 	}
 
-	if len(allIPs) == 0 {
+	if len(targets) == 0 {
 		slog.Info("no live hosts found")
 		os.Exit(0)
 	}
 
 	cdnDetector := scanner.NewCDNDetector()
 	cdnHosts := make(map[string]string)
-	for _, ip := range allIPs {
-		if cdn := cdnDetector.Detect(ip); cdn != "" {
-			cdnHosts[ip] = cdn
+	for _, target := range targets {
+		if cdn := cdnDetector.Detect(target.IP); cdn != "" {
+			cdnHosts[target.IP] = cdn
 		}
 	}
 	if len(cdnHosts) > 0 {
 		slog.Info("CDN hosts detected", "count", len(cdnHosts))
 	}
 
-	progress := scanner.NewProgress(len(allIPs))
+	progress := scanner.NewProgress(len(targets))
 	statsInterval := 5
 	if cfg.Scan.StatsInterval > 0 {
 		statsInterval = cfg.Scan.StatsInterval
@@ -462,15 +517,18 @@ func main() {
 	pool := scanner.NewWorkerPool(cfg.Scan.Workers)
 	var wg sync.WaitGroup
 
-	hostPortsByIP := make(map[string][]int, len(allIPs))
-	remainingByIP := make(map[string]*atomic.Int64, len(allIPs))
+	targetPorts := make(map[string][]int, len(targets))
+	targetMeta := make(map[string]scanTarget, len(targets))
+	remainingByTarget := make(map[string]*atomic.Int64, len(targets))
+	targetOrder := make([]string, 0, len(targets))
 	maxHostPorts := 0
 
-	for _, ip := range allIPs {
+	for _, target := range targets {
 		if ctx.Err() != nil {
 			break
 		}
-		cdn := cdnHosts[ip]
+		cdn := cdnHosts[target.IP]
+		targetKey := target.CheckpointKey
 		hostPorts := make([]int, 0, len(ports))
 		for _, port := range ports {
 			if ctx.Err() != nil {
@@ -479,7 +537,7 @@ func main() {
 			if cdn != "" && !*scanCDN && port != 80 && port != 443 {
 				continue
 			}
-			if checkpoint.ShouldSkip(ip, port) {
+			if checkpoint.ShouldSkip(targetKey, port) {
 				continue
 			}
 			hostPorts = append(hostPorts, port)
@@ -488,22 +546,24 @@ func main() {
 			progress.HostsDone.Add(1)
 			continue
 		}
-		hostPortsByIP[ip] = hostPorts
+		targetPorts[targetKey] = hostPorts
+		targetMeta[targetKey] = target
+		targetOrder = append(targetOrder, targetKey)
 		remaining := &atomic.Int64{}
 		remaining.Store(int64(len(hostPorts)))
-		remainingByIP[ip] = remaining
+		remainingByTarget[targetKey] = remaining
 		if len(hostPorts) > maxHostPorts {
 			maxHostPorts = len(hostPorts)
 		}
 	}
 
 	for idx := 0; idx < maxHostPorts; idx++ {
-		for _, ip := range allIPs {
-			hostPorts, ok := hostPortsByIP[ip]
+		for _, targetKey := range targetOrder {
+			hostPorts, ok := targetPorts[targetKey]
 			if !ok || idx >= len(hostPorts) {
 				continue
 			}
-			remaining := remainingByIP[ip]
+			remaining := remainingByTarget[targetKey]
 			port := hostPorts[idx]
 			if ctx.Err() != nil {
 				if remaining.Add(-1) == 0 {
@@ -512,10 +572,11 @@ func main() {
 				continue
 			}
 
-			cdn := cdnHosts[ip]
+			target := targetMeta[targetKey]
+			cdn := cdnHosts[target.IP]
 			pool.Acquire()
 			wg.Add(1)
-			go func(ip string, port int, remaining *atomic.Int64, cdn string) {
+			go func(target scanTarget, port int, remaining *atomic.Int64, cdn string) {
 				defer wg.Done()
 				defer pool.Release()
 				defer func() {
@@ -532,26 +593,26 @@ func main() {
 				progress.PortsScanned.Add(1)
 				res := scanTCPPort(
 					ctx,
-					ip,
+					target.IP,
 					port,
-					hostnameFor[ip],
+					target.Hostname,
 					cdn,
 					cfg,
 					tcpScanOptions{
 						crawl:   *crawlFlag,
 						tlsEnum: *tlsEnumFlag,
 					},
-					asnFor[ip],
-					orgFor[ip],
-					ptrFor[ip],
+					target.ASN,
+					target.Org,
+					target.PTR,
 				)
 				if res == nil {
 					return
 				}
 				progress.ServicesFound.Add(1)
 				rawResultsCh <- *res
-				checkpoint.Save(ip, port)
-			}(ip, port, remaining, cdn)
+				checkpoint.Save(target.CheckpointKey, port)
+			}(target, port, remaining, cdn)
 		}
 	}
 	wg.Wait()
@@ -564,7 +625,13 @@ func main() {
 			os.Exit(1)
 		}
 		var udpWg sync.WaitGroup
-		for _, ip := range allIPs {
+		seenUDPHosts := make(map[string]struct{})
+		for _, target := range targets {
+			ip := target.IP
+			if _, exists := seenUDPHosts[ip]; exists {
+				continue
+			}
+			seenUDPHosts[ip] = struct{}{}
 			if ctx.Err() != nil {
 				break
 			}
@@ -703,7 +770,7 @@ func main() {
 		}
 	default:
 		for _, res := range results {
-			fmt.Printf("%s:%d [%s %s] TLS:%v %s\n", res.Host, res.Port, res.Service, res.Version, res.TLS != nil, res.Banner)
+			fmt.Printf("%s:%d [%s %s] TLS:%v %s\n", displayHost(res.Host, res.Hostname), res.Port, res.Service, res.Version, res.TLS != nil, res.Banner)
 		}
 	}
 }
@@ -733,15 +800,15 @@ func printResult(res scanner.ScanResult) {
 	}
 
 	fmt.Printf("%s%-21s%s  %s%-10s%s%s%s\n",
-		bold+cyan, fmt.Sprintf("%s:%d", res.Host, res.Port), reset,
+		bold+cyan, fmt.Sprintf("%s:%d", displayHost(res.Host, res.Hostname), res.Port), reset,
 		cyan, res.Service, reset,
 		version, tls,
 	)
 
-	if res.Hostname != "" || res.ASN != "" {
+	if res.PTR != "" || res.ASN != "" {
 		var meta []string
-		if res.Hostname != "" {
-			meta = append(meta, res.Hostname)
+		if res.PTR != "" {
+			meta = append(meta, "PTR "+res.PTR)
 		}
 		if res.ASN != "" {
 			label := "AS" + res.ASN
@@ -750,7 +817,7 @@ func printResult(res scanner.ScanResult) {
 			}
 			meta = append(meta, label)
 		}
-		fmt.Printf("  %sasn%s  %s\n", cyan, reset, strings.Join(meta, "  ·  "))
+		fmt.Printf("  %smeta%s  %s\n", cyan, reset, strings.Join(meta, "  ·  "))
 	}
 
 	if res.App != nil {
@@ -788,7 +855,10 @@ func printResult(res scanner.ScanResult) {
 	}
 
 	if scanner.IsHTTPService(res.Service, res.Port, res.TLS != nil) {
-		if len(res.SecurityHeaders) == 0 {
+		eligible, statusCode := headerInspectionEligible(res)
+		if !eligible {
+			fmt.Printf("  %s~  security headers skipped on HTTP status %d%s\n", dim, statusCode, reset)
+		} else if len(res.SecurityHeaders) == 0 {
 			fmt.Printf("  %s✓  security headers OK%s\n", green, reset)
 		} else {
 			for _, f := range res.SecurityHeaders {
@@ -868,6 +938,95 @@ func printAnalysis(text string) {
 	}
 }
 
+func splitCSV(input string) []string {
+	if strings.TrimSpace(input) == "" {
+		return nil
+	}
+	parts := strings.Split(input, ",")
+	out := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		value := strings.ToLower(strings.TrimSpace(part))
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func normalizeDiscoveredHosts(hosts []string) []string {
+	seen := make(map[string]struct{}, len(hosts))
+	out := make([]string, 0, len(hosts))
+	for _, raw := range hosts {
+		host := strings.TrimSpace(raw)
+		if host == "" {
+			continue
+		}
+		key := host
+		if ip := net.ParseIP(host); ip != nil {
+			key = ip.String()
+			host = key
+		} else {
+			host = strings.TrimSuffix(strings.ToLower(host), ".")
+			key = host
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, host)
+	}
+	return out
+}
+
+func selectScanPorts(isDomainMode bool, set map[string]bool, topPortsValue, portStr string, cfg *config.Config) ([]int, error) {
+	portsExplicit := set["ports"] || set["p"] || set["top-ports"]
+	if isDomainMode && !portsExplicit {
+		return portsForSubdomainProfile(cfg.Subdomain.PortProfile)
+	}
+
+	switch topPortsValue {
+	case "100":
+		return append([]int(nil), scanner.TopPorts100...), nil
+	case "1000":
+		return append([]int(nil), scanner.TopPorts1000...), nil
+	case "":
+		if portStr != "" {
+			return parsePorts(portStr)
+		}
+		return parsePorts(cfg.Scan.Ports)
+	default:
+		return nil, fmt.Errorf("invalid --top-ports value %q, use 100 or 1000", topPortsValue)
+	}
+}
+
+func portsForSubdomainProfile(profile string) ([]int, error) {
+	switch strings.ToLower(strings.TrimSpace(profile)) {
+	case "", "web":
+		return append([]int(nil), scanner.SubdomainWebPorts...), nil
+	case "standard":
+		return append([]int(nil), scanner.TopPorts100...), nil
+	case "full":
+		return append([]int(nil), scanner.TopPorts1000...), nil
+	default:
+		return nil, fmt.Errorf("invalid subdomain port profile %q, use web, standard, or full", profile)
+	}
+}
+
+type scanTarget struct {
+	Hostname      string
+	IP            string
+	ASN           string
+	Org           string
+	PTR           string
+	CheckpointKey string
+}
+
 func resolveTargets(
 	ctx context.Context,
 	hosts []string,
@@ -875,48 +1034,98 @@ func resolveTargets(
 	asnEnabled bool,
 	timeout time.Duration,
 	resolver string,
-) ([]string, map[string]string, map[string]string, map[string]string, map[string]string) {
-	hostnameFor := make(map[string]string)
+) []scanTarget {
 	asnFor := make(map[string]string)
 	orgFor := make(map[string]string)
 	ptrFor := make(map[string]string)
-	seenIPs := make(map[string]bool)
-	var ips []string
+	seen := make(map[string]struct{})
+	var targets []scanTarget
 
-	for _, host := range hosts {
+	for _, rawHost := range hosts {
+		host := strings.TrimSpace(rawHost)
+		if host == "" {
+			continue
+		}
 		resolvedIPs, err := dnsCache.Lookup(host)
 		if err != nil {
 			slog.Warn("DNS lookup failed", "host", host, "err", err)
 			continue
 		}
+
+		hostname := ""
+		if net.ParseIP(host) == nil {
+			hostname = strings.TrimSuffix(strings.ToLower(host), ".")
+		}
+
 		for _, ip := range resolvedIPs {
-			s := ip.String()
-			if !seenIPs[s] {
-				seenIPs[s] = true
-				ips = append(ips, s)
+			ipStr := ip.String()
+			targetKey := targetCheckpointKey(hostname, ipStr)
+			if _, exists := seen[targetKey]; exists {
+				continue
 			}
-			if net.ParseIP(host) == nil {
-				if _, exists := hostnameFor[s]; !exists {
-					hostnameFor[s] = host
-				}
+			seen[targetKey] = struct{}{}
+
+			target := scanTarget{
+				Hostname:      hostname,
+				IP:            ipStr,
+				CheckpointKey: targetKey,
 			}
+
 			if asnEnabled {
-				if _, exists := asnFor[s]; !exists {
-					asn, org := scanner.LookupASN(ctx, s, timeout, resolver)
+				if _, exists := asnFor[ipStr]; !exists {
+					asn, org := scanner.LookupASN(ctx, ipStr, timeout, resolver)
 					if asn != "" {
-						asnFor[s] = asn
-						orgFor[s] = org
+						asnFor[ipStr] = asn
+						orgFor[ipStr] = org
 					}
 				}
-				if _, exists := ptrFor[s]; !exists {
-					if ptrs := scanner.LookupPTR(s); len(ptrs) > 0 {
-						ptrFor[s] = ptrs[0]
+				if _, exists := ptrFor[ipStr]; !exists {
+					if ptrs := scanner.LookupPTR(ipStr); len(ptrs) > 0 {
+						ptrFor[ipStr] = ptrs[0]
 					}
 				}
+				target.ASN = asnFor[ipStr]
+				target.Org = orgFor[ipStr]
+				target.PTR = ptrFor[ipStr]
 			}
+
+			targets = append(targets, target)
 		}
 	}
-	return ips, hostnameFor, asnFor, orgFor, ptrFor
+	return targets
+}
+
+func targetCheckpointKey(hostname, ip string) string {
+	if hostname == "" {
+		return ip
+	}
+	return hostname + "|" + ip
+}
+
+func discoverAliveTargets(ctx context.Context, targets []scanTarget, ports []int, workers int, timeout time.Duration) []scanTarget {
+	seenIPs := make(map[string]struct{}, len(targets))
+	var ips []string
+	for _, target := range targets {
+		if _, exists := seenIPs[target.IP]; exists {
+			continue
+		}
+		seenIPs[target.IP] = struct{}{}
+		ips = append(ips, target.IP)
+	}
+
+	aliveIPs := discoverAliveHosts(ctx, ips, ports, workers, timeout)
+	aliveSet := make(map[string]struct{}, len(aliveIPs))
+	for _, ip := range aliveIPs {
+		aliveSet[ip] = struct{}{}
+	}
+
+	filtered := make([]scanTarget, 0, len(targets))
+	for _, target := range targets {
+		if _, ok := aliveSet[target.IP]; ok {
+			filtered = append(filtered, target)
+		}
+	}
+	return filtered
 }
 
 func discoverAliveHosts(ctx context.Context, ips []string, ports []int, workers int, timeout time.Duration) []string {
@@ -1093,10 +1302,35 @@ func scanTCPPort(
 		App:             appFP,
 		SecurityHeaders: secHeaders,
 		TLSEnum:         tlsEnum,
-		Hostname:        ptr,
+		Hostname:        hostname,
+		PTR:             ptr,
 		ASN:             asn,
 		Org:             org,
 	}
+}
+
+func displayHost(ip, hostname string) string {
+	if hostname == "" || hostname == ip {
+		return ip
+	}
+	return hostname + " (" + ip + ")"
+}
+
+func headerInspectionEligible(res scanner.ScanResult) (bool, int) {
+	if len(res.Metadata) == 0 {
+		return true, 0
+	}
+
+	var meta struct {
+		StatusCode int `json:"statusCode"`
+	}
+	if err := json.Unmarshal(res.Metadata, &meta); err != nil || meta.StatusCode == 0 {
+		return true, 0
+	}
+	if meta.StatusCode >= 200 && meta.StatusCode < 400 {
+		return true, meta.StatusCode
+	}
+	return false, meta.StatusCode
 }
 
 func pick(set map[string]bool, long string, longVal *string, short string, shortVal *string, def string) string {

@@ -12,7 +12,7 @@ A network scanner in Go. Successor to [Flan Scan](https://github.com/cloudflare/
 - TLS certificate inspection (version, cipher, subject, issuer, SANs, expiry, self-signed)
 - CVE lookup by CPE via NVD API
 - Host discovery (TCP probe to skip dead hosts)
-- Passive subdomain enumeration via 9 no-key sources (crt.sh, Common Crawl, Wayback Machine, RapidDNS, Anubis, Digitorus, HudsonRock, SiteDossier, THC)
+- Passive subdomain enumeration via 10 no-key sources (crt.sh, Common Crawl, Wayback Machine, RapidDNS, Anubis, Digitorus, HudsonRock, SiteDossier, THC, ThreatCrowd)
 - CDN detection (Cloudflare) — limits scan to ports 80/443 by default on CDN hosts
 - DNS enumeration with wildcard detection and custom wordlist/resolver support
 - NS, MX, TXT, CNAME record lookups
@@ -27,6 +27,8 @@ A network scanner in Go. Successor to [Flan Scan](https://github.com/cloudflare/
 - AI-powered security analysis via [Together API](https://together.ai) (DeepSeek V3.1) — brief summary on every scan, detailed report with `--analyze`
 - Pretty streaming CLI output with TTY detection (JSONL when piping)
 - JSON, JSONL (streaming), CSV, and text output
+- Domain-mode output keeps subdomain and IP context (`hostname (ip):port`)
+- Security header checks are evaluated on `2xx/3xx` HTTP responses; `4xx/5xx` responses are reported as skipped
 - Configurable via YAML
 
 ## Installation
@@ -98,6 +100,24 @@ Passive enumeration only (skip brute-force):
 flan -d example.com --passive-only
 ```
 
+Subdomains only output (subfinder-style, one per line):
+
+```
+flan -d example.com --subdomains-only
+```
+
+Domain scan port profile:
+
+```
+flan -d example.com --subdomain-ports web
+```
+
+Tune passive enumeration sources/settings:
+
+```
+flan -d example.com --subfinder-all --subfinder-max-time 10 --subfinder-threads 20
+```
+
 Scan all ports on CDN hosts (default is 80/443 only):
 
 ```
@@ -136,6 +156,8 @@ flan -t api.example.com --context /path/to/context.yaml
 
 Context is automatically loaded from `config/context.yaml` when present. It defines asset criticality, data classification, and security policies (TLS minimum version, SSH auth requirements, allowed ports). Policy violations are flagged before AI analysis runs.
 
+Header inspection behavior: security-header findings are generated for HTTP `2xx/3xx` responses. For `4xx/5xx` responses (common on load balancer/CDN default pages), Flan reports header checks as skipped.
+
 ## Flags
 
 | Flag | Description |
@@ -145,10 +167,20 @@ Context is automatically loaded from `config/context.yaml` when present. It defi
 | `-d` | Domain to enumerate via DNS |
 | `-p` | Ports to scan |
 | `--top-ports` | Use nmap top port list: `100` or `1000` |
+| `--subdomain-ports` | Domain mode port profile: `web`, `standard`, or `full` |
 | `-c` | Config file (default `config/config.yaml`) |
 | `-w` | Custom DNS subdomain wordlist |
 | `-r` | Custom DNS resolver (ip:port) |
 | `--passive-only` | Skip brute-force, use passive sources only |
+| `--subdomains-only` | Print discovered subdomains and exit (no port scan) |
+| `--subfinder-sources` | Comma-separated passive sources override |
+| `--subfinder-exclude-sources` | Comma-separated passive sources to exclude |
+| `--subfinder-all` | Use all subfinder passive sources |
+| `--subfinder-recursive` | Use only recursive-capable passive sources |
+| `--subfinder-max-time` | Max passive enumeration time in minutes |
+| `--subfinder-rate-limit` | Passive enumeration HTTP requests/second |
+| `--subfinder-threads` | Passive enumeration threads |
+| `--subfinder-provider-config` | Path to subfinder provider config |
 | `--scan-cdn` | Scan all ports on CDN hosts (default: 80/443 only) |
 | `--udp` | Enable UDP scanning (ports 53, 123, 161, 500 by default) |
 | `--crawl` | Crawl HTTP/HTTPS services for endpoints, sensitive paths, and app fingerprinting |

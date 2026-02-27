@@ -66,6 +66,11 @@ func InspectHeaders(ctx context.Context, scheme, ip, hostname string, port int, 
 	defer resp.Body.Close()
 	defer io.Copy(io.Discard, resp.Body) //nolint:errcheck
 
+	statusCode := resp.StatusCode
+	if statusCode < 200 || statusCode >= 400 {
+		return nil
+	}
+
 	var findings []HeaderFinding
 
 	check := func(header, severity, detail string) {
