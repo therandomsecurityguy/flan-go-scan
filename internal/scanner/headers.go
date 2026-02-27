@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -18,23 +19,33 @@ type HeaderFinding struct {
 
 func InspectHeaders(ctx context.Context, scheme, ip, hostname string, port int, timeout time.Duration) []HeaderFinding {
 	urlHost := ip
-	if hostname != "" {
-		urlHost = hostname
-	} else if strings.Contains(ip, ":") {
+	if strings.Contains(ip, ":") {
 		urlHost = "[" + ip + "]"
 	}
 	target := fmt.Sprintf("%s://%s:%d/", scheme, urlHost, port)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return nil
+		return []HeaderFinding{{
+			Header:   "HTTP Probe",
+			Severity: "LOW",
+			Detail:   fmt.Sprintf("failed to create request: %v", err),
+		}}
 	}
 	req.Header.Set("User-Agent", "flan-scanner/1.0")
+	if hostname != "" {
+		req.Host = hostname
+	}
+
+	tlsCfg := &tls.Config{InsecureSkipVerify: true} //nolint:gosec
+	if hostname != "" && net.ParseIP(hostname) == nil {
+		tlsCfg.ServerName = hostname
+	}
 
 	client := &http.Client{
 		Timeout: timeout * 2,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
+			TLSClientConfig: tlsCfg,
 		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -43,7 +54,14 @@ func InspectHeaders(ctx context.Context, scheme, ip, hostname string, port int, 
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil
+		if ctx.Err() != nil {
+			return nil
+		}
+		return []HeaderFinding{{
+			Header:   "HTTP Probe",
+			Severity: "LOW",
+			Detail:   fmt.Sprintf("header inspection failed: %v", err),
+		}}
 	}
 	defer resp.Body.Close()
 	defer io.Copy(io.Discard, resp.Body) //nolint:errcheck
@@ -120,13 +138,21 @@ func containsVersion(s string) bool {
 }
 
 func isInternalIP(s string) bool {
-	return strings.Contains(s, "10.") ||
-		strings.Contains(s, "172.16.") ||
-		strings.Contains(s, "172.17.") ||
-		strings.Contains(s, "172.18.") ||
-		strings.Contains(s, "172.19.") ||
-		strings.Contains(s, "172.2") ||
-		strings.Contains(s, "172.3") ||
-		strings.Contains(s, "192.168.") ||
-		strings.Contains(s, "127.")
+	for _, part := range strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' ' || r == '"'
+	}) {
+		token := strings.Trim(part, "[]")
+		if eq := strings.LastIndex(token, "="); eq >= 0 && eq < len(token)-1 {
+			token = token[eq+1:]
+		}
+		token = strings.Trim(token, "[]")
+		ip := net.ParseIP(token)
+		if ip == nil {
+			continue
+		}
+		if ip.IsLoopback() || ip.IsPrivate() {
+			return true
+		}
+	}
+	return false
 }

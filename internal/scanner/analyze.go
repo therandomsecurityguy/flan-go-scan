@@ -110,7 +110,11 @@ func Analyze(ctx context.Context, results []ScanResult, outputDir string, sc *Sc
 
 	if outputDir != "" && outputDir != "-" {
 		filename := filepath.Join(outputDir, fmt.Sprintf("analysis-%s.json", time.Now().Format("20060102-150405")))
-		data, _ := json.MarshalIndent(analysis, "", "  ")
+		data, err := json.MarshalIndent(analysis, "", "  ")
+		if err != nil {
+			slog.Warn("failed to marshal analysis", "err", err)
+			return analysis, nil
+		}
 		if err := os.WriteFile(filename, data, 0600); err != nil {
 			slog.Warn("failed to save analysis", "err", err)
 		} else {

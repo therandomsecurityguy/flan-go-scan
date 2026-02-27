@@ -195,7 +195,11 @@ func randomString(n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyz"
 	b := make([]byte, n)
 	for i := range b {
-		idx, _ := rand.Int(rand.Reader, big.NewInt(int64(len(letters))))
+		idx, err := rand.Int(rand.Reader, big.NewInt(int64(len(letters))))
+		if err != nil {
+			b[i] = letters[0]
+			continue
+		}
 		b[i] = letters[idx.Int64()]
 	}
 	return string(b)

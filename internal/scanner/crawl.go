@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -198,10 +199,10 @@ var cookieTech = map[string]string{
 	"connect.sid":  "Node.js/Express",
 }
 
-func Crawl(ctx context.Context, scheme, host string, port int, maxDepth int, timeout time.Duration, reqDelay time.Duration) ([]CrawlResult, *AppFingerprint) {
-	displayHost := host
-	if strings.Contains(host, ":") {
-		displayHost = "[" + host + "]"
+func Crawl(ctx context.Context, scheme, ip, hostname string, port int, maxDepth int, timeout time.Duration, reqDelay time.Duration) ([]CrawlResult, *AppFingerprint) {
+	displayHost := ip
+	if strings.Contains(ip, ":") {
+		displayHost = "[" + ip + "]"
 	}
 	base := fmt.Sprintf("%s://%s:%d", scheme, displayHost, port)
 
@@ -209,10 +210,14 @@ func Crawl(ctx context.Context, scheme, host string, port int, maxDepth int, tim
 	if crawlTimeout > 8*time.Second {
 		crawlTimeout = 8 * time.Second
 	}
+	tlsCfg := &tls.Config{InsecureSkipVerify: true} //nolint:gosec
+	if hostname != "" && net.ParseIP(hostname) == nil {
+		tlsCfg.ServerName = hostname
+	}
 	client := &http.Client{
 		Timeout: crawlTimeout,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
+			TLSClientConfig: tlsCfg,
 		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -267,7 +272,7 @@ func Crawl(ctx context.Context, scheme, host string, port int, maxDepth int, tim
 			}
 		}
 
-		cr, body := fetchPath(ctx, client, base, host, e.path, fp, appsFound)
+		cr, body := fetchPath(ctx, client, base, hostname, e.path, fp, appsFound)
 		if cr == nil {
 			continue
 		}
@@ -318,7 +323,9 @@ func fetchPath(ctx context.Context, client *http.Client, base, hostname, path st
 		return nil, ""
 	}
 	req.Header.Set("User-Agent", "flan-scanner/1.0")
-	req.Host = hostname
+	if hostname != "" {
+		req.Host = hostname
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {

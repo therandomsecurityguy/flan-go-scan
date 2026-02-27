@@ -11,6 +11,9 @@ type RateLimiter struct {
 }
 
 func NewRateLimiter(rps int) *RateLimiter {
+	if rps <= 0 {
+		rps = 1
+	}
 	return &RateLimiter{
 		limiter: rate.NewLimiter(rate.Limit(rps), 1),
 	}

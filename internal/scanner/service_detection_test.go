@@ -1,6 +1,8 @@
 package scanner
 
 import (
+	"context"
+	"net"
 	"testing"
 	"time"
 )
@@ -65,5 +67,27 @@ func TestDetectServiceClosedPort(t *testing.T) {
 	result := DetectService("127.0.0.1", 1, 100*time.Millisecond)
 	if result.Name != "closed" {
 		t.Errorf("expected closed, got %s", result.Name)
+	}
+}
+
+func TestIsTCPPortOpen(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen failed: %v", err)
+	}
+	defer ln.Close()
+
+	go func() {
+		conn, err := ln.Accept()
+		if err == nil {
+			conn.Close()
+		}
+	}()
+
+	addr := ln.Addr().(*net.TCPAddr)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if !IsTCPPortOpen(ctx, "127.0.0.1", addr.Port, 200*time.Millisecond) {
+		t.Fatalf("expected open port")
 	}
 }

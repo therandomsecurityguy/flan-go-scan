@@ -8,11 +8,11 @@ import (
 )
 
 type Progress struct {
-	HostsTotal   int64
-	HostsDone    atomic.Int64
-	PortsScanned atomic.Int64
+	HostsTotal    int64
+	HostsDone     atomic.Int64
+	PortsScanned  atomic.Int64
 	ServicesFound atomic.Int64
-	start        time.Time
+	start         time.Time
 }
 
 func NewProgress(hostsTotal int) *Progress {

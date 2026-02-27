@@ -41,6 +41,19 @@ type DNSExtra struct {
 	Org string      `json:"org,omitempty"`
 }
 
+const defaultDNSResolver = "8.8.8.8:53"
+
+func normalizeResolver(resolver string) string {
+	resolver = strings.TrimSpace(resolver)
+	if resolver == "" {
+		return defaultDNSResolver
+	}
+	if !strings.Contains(resolver, ":") {
+		return net.JoinHostPort(resolver, "53")
+	}
+	return resolver
+}
+
 func LookupPTR(ip string) []string {
 	names, err := net.LookupAddr(ip)
 	if err != nil {
@@ -70,14 +83,19 @@ func LookupSRV(service, proto, domain string) []SRVRecord {
 	return records
 }
 
-func LookupSOA(domain string, timeout time.Duration) *SOARecord {
+func LookupSOA(ctx context.Context, domain string, timeout time.Duration, resolver string) *SOARecord {
 	c := new(dns.Client)
 	c.Timeout = timeout
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(domain), dns.TypeSOA)
 	m.RecursionDesired = true
 
-	r, _, err := c.Exchange(m, "8.8.8.8:53")
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	r, _, err := c.ExchangeContext(queryCtx, m, normalizeResolver(resolver))
 	if err != nil || r == nil {
 		return nil
 	}
@@ -96,14 +114,19 @@ func LookupSOA(domain string, timeout time.Duration) *SOARecord {
 	return nil
 }
 
-func LookupCAA(domain string, timeout time.Duration) []CAARecord {
+func LookupCAA(ctx context.Context, domain string, timeout time.Duration, resolver string) []CAARecord {
 	c := new(dns.Client)
 	c.Timeout = timeout
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(domain), dns.TypeCAA)
 	m.RecursionDesired = true
 
-	r, _, err := c.Exchange(m, "8.8.8.8:53")
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	r, _, err := c.ExchangeContext(queryCtx, m, normalizeResolver(resolver))
 	if err != nil || r == nil {
 		return nil
 	}
@@ -119,7 +142,7 @@ func LookupCAA(domain string, timeout time.Duration) []CAARecord {
 	return records
 }
 
-func LookupASN(ctx context.Context, ip string, timeout time.Duration) (asn, org string) {
+func LookupASN(ctx context.Context, ip string, timeout time.Duration, resolver string) (asn, org string) {
 	reversed, err := reverseIP(ip)
 	if err != nil {
 		return "", ""
@@ -132,7 +155,12 @@ func LookupASN(ctx context.Context, ip string, timeout time.Duration) (asn, org 
 	m.SetQuestion(dns.Fqdn(query), dns.TypeTXT)
 	m.RecursionDesired = true
 
-	r, _, err := c.Exchange(m, "8.8.8.8:53")
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	r, _, err := c.ExchangeContext(queryCtx, m, normalizeResolver(resolver))
 	if err != nil || r == nil {
 		return "", ""
 	}

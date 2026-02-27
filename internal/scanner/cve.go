@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"golang.org/x/sync/singleflight"
+	"golang.org/x/time/rate"
 )
 
 type CVE struct {
@@ -24,19 +26,19 @@ type CVELookup struct {
 	client  *http.Client
 	cache   map[string][]CVE
 	mu      sync.RWMutex
-	rateMu  sync.Mutex
-	last    time.Time
 	sf      singleflight.Group
+	limiter *rate.Limiter
 }
 
 func NewCVELookup() *CVELookup {
 	return &CVELookup{
-		client: &http.Client{Timeout: 15 * time.Second},
-		cache:  make(map[string][]CVE),
+		client:  &http.Client{Timeout: 15 * time.Second},
+		cache:   make(map[string][]CVE),
+		limiter: rate.NewLimiter(rate.Every(6*time.Second), 1),
 	}
 }
 
-func (c *CVELookup) Lookup(cpe string) []CVE {
+func (c *CVELookup) Lookup(ctx context.Context, cpe string) []CVE {
 	if strings.Contains(cpe, ":*:*:*:*:*:*:*") {
 		return nil
 	}
@@ -48,16 +50,11 @@ func (c *CVELookup) Lookup(cpe string) []CVE {
 	}
 	c.mu.RUnlock()
 
-	v, _, _ := c.sf.Do(cpe, func() (interface{}, error) {
-		c.rateMu.Lock()
-		elapsed := time.Since(c.last)
-		if elapsed < 6*time.Second {
-			time.Sleep(6*time.Second - elapsed)
+	v, err, _ := c.sf.Do(cpe, func() (interface{}, error) {
+		if err := c.limiter.Wait(ctx); err != nil {
+			return nil, err
 		}
-		c.last = time.Now()
-		c.rateMu.Unlock()
-
-		cves := c.queryNVD(cpe)
+		cves := c.queryNVD(ctx, cpe)
 
 		c.mu.Lock()
 		c.cache[cpe] = cves
@@ -65,6 +62,9 @@ func (c *CVELookup) Lookup(cpe string) []CVE {
 
 		return cves, nil
 	})
+	if err != nil {
+		return nil
+	}
 
 	if cves, ok := v.([]CVE); ok {
 		return cves
@@ -72,10 +72,10 @@ func (c *CVELookup) Lookup(cpe string) []CVE {
 	return nil
 }
 
-func (c *CVELookup) queryNVD(cpe string) []CVE {
+func (c *CVELookup) queryNVD(ctx context.Context, cpe string) []CVE {
 	u := fmt.Sprintf("https://services.nvd.nist.gov/rest/json/cves/2.0?cpeName=%s&resultsPerPage=20", url.QueryEscape(cpe))
 
-	req, err := http.NewRequest("GET", u, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
 		slog.Warn("NVD request build failed", "cpe", cpe, "err", err)
 		return nil
