@@ -118,7 +118,7 @@ func TestCrawlSensitivePaths(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	results, _ := Crawl(context.Background(), "http", "127.0.0.1", srv.Listener.Addr().(*net.TCPAddr).Port, 0, 5*time.Second, 0)
+	results, _ := Crawl(context.Background(), "http", "127.0.0.1", "", srv.Listener.Addr().(*net.TCPAddr).Port, 0, 5*time.Second, 0)
 
 	byPath := make(map[string]CrawlResult)
 	for _, r := range results {
@@ -134,4 +134,29 @@ func TestCrawlSensitivePaths(t *testing.T) {
 	if _, ok := byPath["/hidden"]; !ok {
 		t.Error("robots.txt Disallow /hidden should be crawled as a finding")
 	}
+}
+
+func TestCrawlUsesProvidedHostHeader(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != "testphp.vulnweb.com" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("<html><title>ok</title></html>"))
+	}))
+	defer srv.Close()
+
+	port := srv.Listener.Addr().(*net.TCPAddr).Port
+	results, _ := Crawl(context.Background(), "http", "127.0.0.1", "testphp.vulnweb.com", port, 0, 5*time.Second, 0)
+	if len(results) == 0 {
+		t.Fatal("expected at least one crawl result")
+	}
+	for _, r := range results {
+		if r.Path == "/" && r.StatusCode == http.StatusOK {
+			return
+		}
+	}
+	t.Fatalf("expected / to be fetched with status 200, got %+v", results)
 }

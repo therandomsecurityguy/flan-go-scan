@@ -17,9 +17,9 @@ type AssetContext struct {
 type ScanContext struct {
 	Assets   map[string]AssetContext `yaml:"assets"`
 	Policies struct {
-		TLSMinVersion   string   `yaml:"tls_min_version"`
-		SSHPasswordAuth *bool    `yaml:"ssh_password_auth"`
-		AllowedPorts    []int    `yaml:"allowed_ports"`
+		TLSMinVersion   string `yaml:"tls_min_version"`
+		SSHPasswordAuth *bool  `yaml:"ssh_password_auth"`
+		AllowedPorts    []int  `yaml:"allowed_ports"`
 	} `yaml:"policies"`
 }
 

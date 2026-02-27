@@ -5,14 +5,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
 type Checkpoint struct {
 	filePath string
 	mu       sync.Mutex
-	Progress map[string]map[int]bool `json:"progress"`
+	Progress map[string]map[int]bool
 	dirty    bool
+}
+
+type checkpointDisk struct {
+	Progress map[string]map[int]bool `json:"progress"`
 }
 
 func NewCheckpoint(path string) (*Checkpoint, error) {
@@ -24,7 +29,9 @@ func NewCheckpoint(path string) (*Checkpoint, error) {
 		filePath: abs,
 		Progress: make(map[string]map[int]bool),
 	}
-	cp.Load()
+	if err := cp.Load(); err != nil {
+		return nil, err
+	}
 	return cp, nil
 }
 
@@ -33,9 +40,27 @@ func (c *Checkpoint) Load() error {
 	defer c.mu.Unlock()
 	data, err := os.ReadFile(c.filePath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if strings.TrimSpace(string(data)) == "" {
 		return nil
 	}
-	return json.Unmarshal(data, &c.Progress)
+
+	var wrapped checkpointDisk
+	if err := json.Unmarshal(data, &wrapped); err == nil && wrapped.Progress != nil {
+		c.Progress = wrapped.Progress
+		return nil
+	}
+
+	var legacy map[string]map[int]bool
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+	c.Progress = legacy
+	return nil
 }
 
 func (c *Checkpoint) Save(host string, port int) {
@@ -54,7 +79,7 @@ func (c *Checkpoint) Flush() error {
 	if !c.dirty {
 		return nil
 	}
-	data, err := json.MarshalIndent(c.Progress, "", "  ")
+	data, err := json.MarshalIndent(checkpointDisk{Progress: c.Progress}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -84,5 +109,8 @@ func (c *Checkpoint) Clear() error {
 	dir := filepath.Dir(c.filePath)
 	tmp := filepath.Join(dir, ".checkpoint.tmp")
 	os.Remove(tmp)
-	return os.Remove(c.filePath)
+	if err := os.Remove(c.filePath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }

@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"net"
 	"regexp"
@@ -13,6 +14,21 @@ type ServiceResult struct {
 	Name    string `json:"name"`
 	Version string `json:"version,omitempty"`
 	Banner  string `json:"banner,omitempty"`
+}
+
+func IsTCPPortOpen(ctx context.Context, host string, port int, timeout time.Duration) bool {
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+	probeTimeout := timeout
+	if probeTimeout <= 0 || probeTimeout > time.Second {
+		probeTimeout = time.Second
+	}
+	dialer := net.Dialer{Timeout: probeTimeout}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 func DetectService(host string, port int, timeout time.Duration) ServiceResult {

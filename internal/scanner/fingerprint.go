@@ -11,11 +11,11 @@ import (
 )
 
 type FingerprintResult struct {
-	Service   string            `json:"service"`
-	Version   string            `json:"version,omitempty"`
-	Transport string            `json:"transport"`
-	TLS       bool              `json:"tls"`
-	Metadata  json.RawMessage   `json:"metadata,omitempty"`
+	Service   string          `json:"service"`
+	Version   string          `json:"version,omitempty"`
+	Transport string          `json:"transport"`
+	TLS       bool            `json:"tls"`
+	Metadata  json.RawMessage `json:"metadata,omitempty"`
 }
 
 func Fingerprint(host string, port int, timeout time.Duration) *FingerprintResult {

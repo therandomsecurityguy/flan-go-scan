@@ -48,7 +48,6 @@ func (w *ReportWriter) WriteCSV(results []scanner.ScanResult) error {
 	}
 	defer file.Close()
 	writer := csv.NewWriter(file)
-	defer writer.Flush()
 	header := []string{"Host", "Port", "Protocol", "Service", "Version", "Banner", "TLS", "TLS_Version", "TLS_Subject", "TLS_Issuer", "TLS_Expired", "TLS_SelfSigned", "Vulnerabilities"}
 	if err := writer.Write(header); err != nil {
 		return fmt.Errorf("write csv header: %w", err)
@@ -86,6 +85,10 @@ func (w *ReportWriter) WriteCSV(results []scanner.ScanResult) error {
 			return fmt.Errorf("write csv row: %w", err)
 		}
 	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return fmt.Errorf("flush csv writer: %w", err)
+	}
 	return nil
 }
 
@@ -102,7 +105,9 @@ func NewJSONLWriter(outputDir string) (*JSONLWriter, error) {
 	if outputDir == "" || outputDir == "-" {
 		w = os.Stdout
 	} else {
-		os.MkdirAll(outputDir, 0755)
+		if err := os.MkdirAll(outputDir, 0755); err != nil {
+			return nil, fmt.Errorf("create output directory: %w", err)
+		}
 		filename = filepath.Join(outputDir, fmt.Sprintf("scan-%s.jsonl", time.Now().Format("20060102-150405")))
 		f, err := os.Create(filename)
 		if err != nil {

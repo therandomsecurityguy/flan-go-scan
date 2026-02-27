@@ -51,6 +51,13 @@ func expandTarget(target string) ([]string, error) {
 		return nil, fmt.Errorf("unsupported CIDR: %s", target)
 	}
 
+	if ipNet.IP.To4() == nil {
+		if ones == bits {
+			return []string{ip.String()}, nil
+		}
+		return nil, fmt.Errorf("IPv6 CIDR ranges are not supported: %s", target)
+	}
+
 	if ones == bits {
 		return []string{ip.String()}, nil
 	}

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -338,6 +339,9 @@ func main() {
 	}
 
 	dnsCache := dns.NewDNSCache(cfg.DNS.TTL)
+	if cfg.Scan.RateLimit <= 0 {
+		slog.Warn("invalid scan.rate_limit; clamping to 1 request/sec", "rate_limit", cfg.Scan.RateLimit)
+	}
 	limiter := scanner.NewRateLimiter(cfg.Scan.RateLimit)
 	checkpoint, err := scanner.NewCheckpoint(cfg.Checkpoint.File)
 	if err != nil {
@@ -345,6 +349,7 @@ func main() {
 		os.Exit(1)
 	}
 	cveLookup := scanner.NewCVELookup()
+	udpEnabled := *udpFlag || cfg.Scan.UDP
 
 	var jsonlWriter *output.JSONLWriter
 	if cfg.Output.Format == "jsonl" {
@@ -357,64 +362,12 @@ func main() {
 		defer jsonlWriter.Close()
 	}
 
-	hostnameFor := make(map[string]string)
-	asnFor := make(map[string]string)
-	orgFor := make(map[string]string)
-	ptrFor := make(map[string]string)
-	var allIPs []string
-	for _, host := range hosts {
-		ips, err := dnsCache.Lookup(host)
-		if err != nil {
-			slog.Warn("DNS lookup failed", "host", host, "err", err)
-			continue
-		}
-		for _, ip := range ips {
-			s := ip.String()
-			allIPs = append(allIPs, s)
-			if net.ParseIP(host) == nil {
-				hostnameFor[s] = host
-			}
-			if *asnFlag {
-				asn, org := scanner.LookupASN(ctx, s, cfg.Scan.Timeout)
-				if asn != "" {
-					asnFor[s] = asn
-					orgFor[s] = org
-				}
-				if ptrs := scanner.LookupPTR(s); len(ptrs) > 0 {
-					ptrFor[s] = ptrs[0]
-				}
-			}
-		}
-	}
+	allIPs, hostnameFor, asnFor, orgFor, ptrFor := resolveTargets(ctx, hosts, dnsCache, *asnFlag, cfg.Scan.Timeout, res)
 
-	if cfg.Scan.Discovery {
-		slog.Info("running host discovery", "targets", len(allIPs))
-		type aliveResult struct {
-			ip    string
-			alive bool
-		}
-		results := make(chan aliveResult, len(allIPs))
-		discoveryPool := scanner.NewWorkerPool(cfg.Scan.Workers)
-		var discoveryWg sync.WaitGroup
-		for _, ip := range allIPs {
-			discoveryPool.Acquire()
-			discoveryWg.Add(1)
-			go func(ip string) {
-				defer discoveryWg.Done()
-				defer discoveryPool.Release()
-				results <- aliveResult{ip: ip, alive: scanner.IsHostAlive(ip, cfg.Scan.Timeout)}
-			}(ip)
-		}
-		discoveryWg.Wait()
-		close(results)
-		var alive []string
-		for r := range results {
-			if r.alive {
-				alive = append(alive, r.ip)
-			}
-		}
-		slog.Info("host discovery complete", "alive", len(alive), "filtered", len(allIPs)-len(alive))
-		allIPs = alive
+	if cfg.Scan.Discovery && !udpEnabled {
+		allIPs = discoverAliveHosts(ctx, allIPs, ports, cfg.Scan.Workers, cfg.Scan.Timeout)
+	} else if cfg.Scan.Discovery && udpEnabled {
+		slog.Info("skipping discovery filter for UDP mode to avoid dropping UDP-only hosts", "targets", len(allIPs))
 	}
 
 	if len(allIPs) == 0 {
@@ -443,7 +396,48 @@ func main() {
 		go progress.Run(progressCtx, time.Duration(statsInterval)*time.Second)
 	}
 
+	checkpointCtx, stopCheckpoint := context.WithCancel(ctx)
+	defer stopCheckpoint()
+	var checkpointWg sync.WaitGroup
+	checkpointWg.Add(1)
+	go func() {
+		defer checkpointWg.Done()
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-checkpointCtx.Done():
+				return
+			case <-ticker.C:
+				if err := checkpoint.Flush(); err != nil {
+					slog.Warn("periodic checkpoint flush failed", "err", err)
+				}
+			}
+		}
+	}()
+
+	rawResultsCh := make(chan scanner.ScanResult, 100)
 	resultsCh := make(chan scanner.ScanResult, 100)
+	cveWorkers := 4
+	if cfg.Scan.Workers > 0 && cfg.Scan.Workers < cveWorkers {
+		cveWorkers = cfg.Scan.Workers
+	}
+	var cveWg sync.WaitGroup
+	for i := 0; i < cveWorkers; i++ {
+		cveWg.Add(1)
+		go func() {
+			defer cveWg.Done()
+			for res := range rawResultsCh {
+				enrichResultVulnerabilities(ctx, &res, cveLookup)
+				resultsCh <- res
+			}
+		}()
+	}
+	go func() {
+		cveWg.Wait()
+		close(resultsCh)
+	}()
+
 	var collectWg sync.WaitGroup
 	var results []scanner.ScanResult
 
@@ -468,11 +462,16 @@ func main() {
 	pool := scanner.NewWorkerPool(cfg.Scan.Workers)
 	var wg sync.WaitGroup
 
+	hostPortsByIP := make(map[string][]int, len(allIPs))
+	remainingByIP := make(map[string]*atomic.Int64, len(allIPs))
+	maxHostPorts := 0
+
 	for _, ip := range allIPs {
 		if ctx.Err() != nil {
 			break
 		}
 		cdn := cdnHosts[ip]
+		hostPorts := make([]int, 0, len(ports))
 		for _, port := range ports {
 			if ctx.Err() != nil {
 				break
@@ -483,11 +482,47 @@ func main() {
 			if checkpoint.ShouldSkip(ip, port) {
 				continue
 			}
+			hostPorts = append(hostPorts, port)
+		}
+		if len(hostPorts) == 0 {
+			progress.HostsDone.Add(1)
+			continue
+		}
+		hostPortsByIP[ip] = hostPorts
+		remaining := &atomic.Int64{}
+		remaining.Store(int64(len(hostPorts)))
+		remainingByIP[ip] = remaining
+		if len(hostPorts) > maxHostPorts {
+			maxHostPorts = len(hostPorts)
+		}
+	}
+
+	for idx := 0; idx < maxHostPorts; idx++ {
+		for _, ip := range allIPs {
+			hostPorts, ok := hostPortsByIP[ip]
+			if !ok || idx >= len(hostPorts) {
+				continue
+			}
+			remaining := remainingByIP[ip]
+			port := hostPorts[idx]
+			if ctx.Err() != nil {
+				if remaining.Add(-1) == 0 {
+					progress.HostsDone.Add(1)
+				}
+				continue
+			}
+
+			cdn := cdnHosts[ip]
 			pool.Acquire()
 			wg.Add(1)
-			go func(ip string, port int) {
+			go func(ip string, port int, remaining *atomic.Int64, cdn string) {
 				defer wg.Done()
 				defer pool.Release()
+				defer func() {
+					if remaining.Add(-1) == 0 {
+						progress.HostsDone.Add(1)
+					}
+				}()
 				if ctx.Err() != nil {
 					return
 				}
@@ -495,118 +530,32 @@ func main() {
 					return
 				}
 				progress.PortsScanned.Add(1)
-
-				fp := scanner.Fingerprint(ip, port, cfg.Scan.Timeout)
-				if fp != nil {
-					progress.ServicesFound.Add(1)
-					var tlsResult *scanner.TLSResult
-					if fp.TLS {
-						tlsResult = scanner.InspectTLS(ctx, ip, port, cfg.Scan.Timeout)
-					}
-
-					var vulns []string
-					if fp.Metadata != nil {
-						var meta struct {
-							CPEs []string `json:"cpes"`
-						}
-						if json.Unmarshal(fp.Metadata, &meta) == nil {
-							for _, cpe := range meta.CPEs {
-								for _, cve := range cveLookup.Lookup(cpe) {
-									vulns = append(vulns, cve.ID)
-								}
-							}
-						}
-					}
-
-					var endpoints []scanner.CrawlResult
-					var appFP *scanner.AppFingerprint
-					if *crawlFlag && scanner.IsHTTPService(fp.Service, port, fp.TLS) {
-						endpoints, appFP = scanner.Crawl(ctx, scanner.HTTPScheme(fp.TLS), ip, port, cfg.Scan.CrawlDepth, cfg.Scan.Timeout, 100*time.Millisecond)
-					}
-
-					var secHeaders []scanner.HeaderFinding
-					if scanner.IsHTTPService(fp.Service, port, fp.TLS) {
-						isTLS := fp.TLS || port == 443 || port == 8443 || port == 4443
-						secHeaders = scanner.InspectHeaders(ctx, scanner.HTTPScheme(isTLS), ip, hostnameFor[ip], port, cfg.Scan.Timeout)
-					}
-
-					var tlsEnum *scanner.TLSEnum
-					if *tlsEnumFlag && (fp.TLS || port == 443 || port == 8443 || port == 4443) {
-						tlsEnum = scanner.EnumerateTLS(ctx, ip, hostnameFor[ip], port, cfg.Scan.Timeout)
-					}
-
-					resultsCh <- scanner.ScanResult{
-						Host:            ip,
-						Port:            port,
-						Protocol:        fp.Transport,
-						Service:         fp.Service,
-						Version:         fp.Version,
-						CDN:             cdn,
-						TLS:             tlsResult,
-						Metadata:        fp.Metadata,
-						Vulnerabilities: vulns,
-						Endpoints:       endpoints,
-						App:             appFP,
-						SecurityHeaders: secHeaders,
-						TLSEnum:         tlsEnum,
-						Hostname:        ptrFor[ip],
-						ASN:             asnFor[ip],
-						Org:             orgFor[ip],
-					}
-					checkpoint.Save(ip, port)
+				res := scanTCPPort(
+					ctx,
+					ip,
+					port,
+					hostnameFor[ip],
+					cdn,
+					cfg,
+					tcpScanOptions{
+						crawl:   *crawlFlag,
+						tlsEnum: *tlsEnumFlag,
+					},
+					asnFor[ip],
+					orgFor[ip],
+					ptrFor[ip],
+				)
+				if res == nil {
 					return
 				}
-
-				svc := scanner.DetectService(ip, port, cfg.Scan.Timeout)
-				if svc.Name == "closed" {
-					return
-				}
-
 				progress.ServicesFound.Add(1)
-				tlsResult := scanner.InspectTLS(ctx, ip, port, cfg.Scan.Timeout)
-
-				var endpoints []scanner.CrawlResult
-				var appFP *scanner.AppFingerprint
-				hasTLS := tlsResult != nil || port == 443 || port == 8443 || port == 4443
-				if *crawlFlag && scanner.IsHTTPService(svc.Name, port, tlsResult != nil) {
-					endpoints, appFP = scanner.Crawl(ctx, scanner.HTTPScheme(hasTLS), ip, port, cfg.Scan.CrawlDepth, cfg.Scan.Timeout, 100*time.Millisecond)
-				}
-
-				var secHeaders []scanner.HeaderFinding
-				if scanner.IsHTTPService(svc.Name, port, tlsResult != nil) {
-					secHeaders = scanner.InspectHeaders(ctx, scanner.HTTPScheme(hasTLS), ip, hostnameFor[ip], port, cfg.Scan.Timeout)
-				}
-
-				var tlsEnum *scanner.TLSEnum
-				if *tlsEnumFlag && hasTLS {
-					tlsEnum = scanner.EnumerateTLS(ctx, ip, hostnameFor[ip], port, cfg.Scan.Timeout)
-				}
-
-				resultsCh <- scanner.ScanResult{
-					Host:            ip,
-					Port:            port,
-					Protocol:        "tcp",
-					Service:         svc.Name,
-					Version:         svc.Version,
-					Banner:          svc.Banner,
-					CDN:             cdn,
-					TLS:             tlsResult,
-					Endpoints:       endpoints,
-					App:             appFP,
-					SecurityHeaders: secHeaders,
-					TLSEnum:         tlsEnum,
-					Hostname:        ptrFor[ip],
-					ASN:             asnFor[ip],
-					Org:             orgFor[ip],
-				}
+				rawResultsCh <- *res
 				checkpoint.Save(ip, port)
-			}(ip, port)
+			}(ip, port, remaining, cdn)
 		}
-		progress.HostsDone.Add(1)
 	}
 	wg.Wait()
 
-	udpEnabled := *udpFlag || cfg.Scan.UDP
 	if udpEnabled {
 		udpPortStr := cfg.Scan.UDPPorts
 		udpPorts, err := parsePorts(udpPortStr)
@@ -639,7 +588,7 @@ func main() {
 						return
 					}
 					progress.ServicesFound.Add(1)
-					resultsCh <- scanner.ScanResult{
+					rawResultsCh <- scanner.ScanResult{
 						Host:     ip,
 						Port:     port,
 						Protocol: "udp",
@@ -653,8 +602,10 @@ func main() {
 		udpWg.Wait()
 	}
 
-	close(resultsCh)
+	close(rawResultsCh)
 	collectWg.Wait()
+	stopCheckpoint()
+	checkpointWg.Wait()
 
 	if err := checkpoint.Flush(); err != nil {
 		slog.Error("failed to flush checkpoint", "err", err)
@@ -914,6 +865,237 @@ func printAnalysis(text string) {
 		default:
 			fmt.Println(clean)
 		}
+	}
+}
+
+func resolveTargets(
+	ctx context.Context,
+	hosts []string,
+	dnsCache *dns.DNSCache,
+	asnEnabled bool,
+	timeout time.Duration,
+	resolver string,
+) ([]string, map[string]string, map[string]string, map[string]string, map[string]string) {
+	hostnameFor := make(map[string]string)
+	asnFor := make(map[string]string)
+	orgFor := make(map[string]string)
+	ptrFor := make(map[string]string)
+	seenIPs := make(map[string]bool)
+	var ips []string
+
+	for _, host := range hosts {
+		resolvedIPs, err := dnsCache.Lookup(host)
+		if err != nil {
+			slog.Warn("DNS lookup failed", "host", host, "err", err)
+			continue
+		}
+		for _, ip := range resolvedIPs {
+			s := ip.String()
+			if !seenIPs[s] {
+				seenIPs[s] = true
+				ips = append(ips, s)
+			}
+			if net.ParseIP(host) == nil {
+				if _, exists := hostnameFor[s]; !exists {
+					hostnameFor[s] = host
+				}
+			}
+			if asnEnabled {
+				if _, exists := asnFor[s]; !exists {
+					asn, org := scanner.LookupASN(ctx, s, timeout, resolver)
+					if asn != "" {
+						asnFor[s] = asn
+						orgFor[s] = org
+					}
+				}
+				if _, exists := ptrFor[s]; !exists {
+					if ptrs := scanner.LookupPTR(s); len(ptrs) > 0 {
+						ptrFor[s] = ptrs[0]
+					}
+				}
+			}
+		}
+	}
+	return ips, hostnameFor, asnFor, orgFor, ptrFor
+}
+
+func discoverAliveHosts(ctx context.Context, ips []string, ports []int, workers int, timeout time.Duration) []string {
+	slog.Info("running host discovery", "targets", len(ips))
+	type aliveResult struct {
+		ip    string
+		alive bool
+	}
+	results := make(chan aliveResult, len(ips))
+	discoveryPool := scanner.NewWorkerPool(workers)
+	var discoveryWg sync.WaitGroup
+
+	for _, ip := range ips {
+		discoveryPool.Acquire()
+		discoveryWg.Add(1)
+		go func(ip string) {
+			defer discoveryWg.Done()
+			defer discoveryPool.Release()
+			results <- aliveResult{ip: ip, alive: scanner.IsHostAlive(ctx, ip, ports, timeout)}
+		}(ip)
+	}
+	discoveryWg.Wait()
+	close(results)
+
+	var alive []string
+	for r := range results {
+		if r.alive {
+			alive = append(alive, r.ip)
+		}
+	}
+	slog.Info("host discovery complete", "alive", len(alive), "filtered", len(ips)-len(alive))
+	return alive
+}
+
+func enrichResultVulnerabilities(ctx context.Context, res *scanner.ScanResult, cveLookup *scanner.CVELookup) {
+	if res == nil || len(res.Metadata) == 0 {
+		return
+	}
+	var meta struct {
+		CPEs []string `json:"cpes"`
+	}
+	if err := json.Unmarshal(res.Metadata, &meta); err != nil || len(meta.CPEs) == 0 {
+		return
+	}
+
+	const (
+		maxCPELookups   = 2
+		cveLookupWindow = 4 * time.Second
+	)
+
+	seenCPEs := make(map[string]struct{})
+	seenCVEs := make(map[string]struct{})
+	var vulns []string
+
+	for _, cpe := range meta.CPEs {
+		if cpe == "" {
+			continue
+		}
+		if _, seen := seenCPEs[cpe]; seen {
+			continue
+		}
+		if len(seenCPEs) >= maxCPELookups {
+			break
+		}
+		seenCPEs[cpe] = struct{}{}
+
+		lookupCtx, cancel := context.WithTimeout(ctx, cveLookupWindow)
+		for _, cve := range cveLookup.Lookup(lookupCtx, cpe) {
+			if _, seen := seenCVEs[cve.ID]; seen {
+				continue
+			}
+			seenCVEs[cve.ID] = struct{}{}
+			vulns = append(vulns, cve.ID)
+		}
+		cancel()
+	}
+	res.Vulnerabilities = vulns
+}
+
+type tcpScanOptions struct {
+	crawl   bool
+	tlsEnum bool
+}
+
+func scanTCPPort(
+	ctx context.Context,
+	ip string,
+	port int,
+	hostname string,
+	cdn string,
+	cfg *config.Config,
+	opts tcpScanOptions,
+	asn string,
+	org string,
+	ptr string,
+) *scanner.ScanResult {
+	if !scanner.IsTCPPortOpen(ctx, ip, port, cfg.Scan.Timeout) {
+		return nil
+	}
+
+	fp := scanner.Fingerprint(ip, port, cfg.Scan.Timeout)
+
+	service := ""
+	version := ""
+	protocol := "tcp"
+	banner := ""
+	var metadata []byte
+
+	if fp != nil {
+		if fp.Service != "" {
+			service = fp.Service
+		}
+		if fp.Version != "" {
+			version = fp.Version
+		}
+		if fp.Transport != "" {
+			protocol = fp.Transport
+		}
+		metadata = fp.Metadata
+	}
+
+	if service == "" || service == "unknown" {
+		svc := scanner.DetectService(ip, port, cfg.Scan.Timeout)
+		if svc.Name == "closed" {
+			return nil
+		}
+		if service == "" || service == "unknown" {
+			service = svc.Name
+		}
+		version = svc.Version
+		banner = svc.Banner
+	}
+	if service == "" {
+		service = "unknown"
+	}
+
+	likelyTLS := port == 443 || port == 8443 || port == 4443
+	if fp != nil && fp.TLS {
+		likelyTLS = true
+	}
+	var tlsResult *scanner.TLSResult
+	if likelyTLS {
+		tlsResult = scanner.InspectTLS(ctx, ip, port, cfg.Scan.Timeout)
+	}
+	hasTLS := tlsResult != nil || likelyTLS
+
+	var endpoints []scanner.CrawlResult
+	var appFP *scanner.AppFingerprint
+	if opts.crawl && scanner.IsHTTPService(service, port, hasTLS) {
+		endpoints, appFP = scanner.Crawl(ctx, scanner.HTTPScheme(hasTLS), ip, hostname, port, cfg.Scan.CrawlDepth, cfg.Scan.Timeout, 100*time.Millisecond)
+	}
+
+	var secHeaders []scanner.HeaderFinding
+	if scanner.IsHTTPService(service, port, hasTLS) {
+		secHeaders = scanner.InspectHeaders(ctx, scanner.HTTPScheme(hasTLS), ip, hostname, port, cfg.Scan.Timeout)
+	}
+
+	var tlsEnum *scanner.TLSEnum
+	if opts.tlsEnum && hasTLS {
+		tlsEnum = scanner.EnumerateTLS(ctx, ip, hostname, port, cfg.Scan.Timeout)
+	}
+
+	return &scanner.ScanResult{
+		Host:            ip,
+		Port:            port,
+		Protocol:        protocol,
+		Service:         service,
+		Version:         version,
+		Banner:          banner,
+		CDN:             cdn,
+		TLS:             tlsResult,
+		Metadata:        metadata,
+		Endpoints:       endpoints,
+		App:             appFP,
+		SecurityHeaders: secHeaders,
+		TLSEnum:         tlsEnum,
+		Hostname:        ptr,
+		ASN:             asn,
+		Org:             org,
 	}
 }
 

@@ -57,6 +57,11 @@ func TestParseTargets(t *testing.T) {
 			input:   "10.0.0.0/8\n",
 			wantErr: true,
 		},
+		{
+			name:    "ipv6 cidr range not supported",
+			input:   "2001:db8::/64\n",
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
