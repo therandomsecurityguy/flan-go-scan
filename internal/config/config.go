@@ -19,6 +19,17 @@ type Config struct {
 		UDPPorts      string        `mapstructure:"udp_ports"`
 		CrawlDepth    int           `mapstructure:"crawl_depth"`
 	} `mapstructure:"scan"`
+	Subdomain struct {
+		PortProfile    string `mapstructure:"port_profile"`
+		Sources        string `mapstructure:"sources"`
+		ExcludeSources string `mapstructure:"exclude_sources"`
+		AllSources     bool   `mapstructure:"all_sources"`
+		RecursiveOnly  bool   `mapstructure:"recursive_only"`
+		MaxTime        int    `mapstructure:"max_time"`
+		RateLimit      int    `mapstructure:"rate_limit"`
+		Threads        int    `mapstructure:"threads"`
+		ProviderConfig string `mapstructure:"provider_config"`
+	} `mapstructure:"subdomain"`
 	DNS struct {
 		TTL time.Duration `mapstructure:"ttl"`
 	} `mapstructure:"dns"`
@@ -42,6 +53,15 @@ func defaults() *Config {
 	cfg.Scan.UDP = false
 	cfg.Scan.UDPPorts = "53,123,161,500"
 	cfg.Scan.CrawlDepth = 2
+	cfg.Subdomain.PortProfile = "web"
+	cfg.Subdomain.Sources = "crtsh,anubis,digitorus,thc,commoncrawl,waybackarchive,rapiddns,hudsonrock,sitedossier,threatcrowd"
+	cfg.Subdomain.ExcludeSources = ""
+	cfg.Subdomain.AllSources = false
+	cfg.Subdomain.RecursiveOnly = false
+	cfg.Subdomain.MaxTime = 5
+	cfg.Subdomain.RateLimit = 0
+	cfg.Subdomain.Threads = 10
+	cfg.Subdomain.ProviderConfig = ""
 	cfg.DNS.TTL = 10 * time.Minute
 	cfg.Output.Format = "jsonl"
 	cfg.Output.Directory = "-"

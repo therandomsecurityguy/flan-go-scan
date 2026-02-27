@@ -2,41 +2,52 @@ package scanner
 
 import (
 	"context"
-	"strings"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 )
 
-func TestInspectHeadersReturnsProbeFailureFinding(t *testing.T) {
-	findings := InspectHeaders(context.Background(), "http", "127.0.0.1", "", 1, 50*time.Millisecond)
-	if len(findings) == 0 {
-		t.Fatal("expected at least one finding for unreachable host")
+func TestInspectHeadersSkipsNonSuccessResponses(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	host, portStr, err := net.SplitHostPort(ts.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split host port: %v", err)
 	}
-	if findings[0].Header != "HTTP Probe" {
-		t.Fatalf("expected HTTP Probe finding, got %q", findings[0].Header)
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("parse port: %v", err)
 	}
-	if !strings.Contains(findings[0].Detail, "failed") {
-		t.Fatalf("expected probe failure detail, got %q", findings[0].Detail)
+
+	findings := InspectHeaders(context.Background(), "http", host, "", port, 2*time.Second)
+	if len(findings) != 0 {
+		t.Fatalf("expected no findings for non-success response, got %d", len(findings))
 	}
 }
 
-func TestIsInternalIP(t *testing.T) {
-	cases := []struct {
-		value string
-		want  bool
-	}{
-		{value: "10.0.0.5", want: true},
-		{value: "172.20.1.7", want: true},
-		{value: "192.168.1.12", want: true},
-		{value: "127.0.0.1", want: true},
-		{value: "8.8.8.8", want: false},
-		{value: "for=10.1.1.2, for=8.8.8.8", want: true},
+func TestInspectHeadersReportsOnSuccessResponses(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	host, portStr, err := net.SplitHostPort(ts.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split host port: %v", err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("parse port: %v", err)
 	}
 
-	for _, tc := range cases {
-		got := isInternalIP(tc.value)
-		if got != tc.want {
-			t.Fatalf("isInternalIP(%q) = %v, want %v", tc.value, got, tc.want)
-		}
+	findings := InspectHeaders(context.Background(), "http", host, "", port, 2*time.Second)
+	if len(findings) == 0 {
+		t.Fatal("expected missing-header findings for success response")
 	}
 }

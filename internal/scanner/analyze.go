@@ -174,12 +174,20 @@ func buildSummary(results []ScanResult) string {
 
 	hosts := make(map[string]bool)
 	for _, r := range results {
-		hosts[r.Host] = true
+		key := r.Host
+		if r.Hostname != "" {
+			key = r.Hostname + "|" + r.Host
+		}
+		hosts[key] = true
 	}
 	fmt.Fprintf(&b, "Scan summary: %d services found across %d hosts\n\n", len(results), len(hosts))
 
 	for _, r := range results {
-		fmt.Fprintf(&b, "Host: %s Port: %d Service: %s", r.Host, r.Port, r.Service)
+		displayHost := r.Host
+		if r.Hostname != "" && r.Hostname != r.Host {
+			displayHost = fmt.Sprintf("%s (%s)", r.Hostname, r.Host)
+		}
+		fmt.Fprintf(&b, "Host: %s Port: %d Service: %s", displayHost, r.Port, r.Service)
 		if r.Version != "" {
 			fmt.Fprintf(&b, " Version: %s", r.Version)
 		}
@@ -204,8 +212,8 @@ func buildSummary(results []ScanResult) string {
 			fmt.Fprintf(&b, "  CVEs: %s\n", strings.Join(r.Vulnerabilities, ", "))
 		}
 
-		if r.Hostname != "" {
-			fmt.Fprintf(&b, "  PTR: %s\n", r.Hostname)
+		if r.PTR != "" {
+			fmt.Fprintf(&b, "  PTR: %s\n", r.PTR)
 		}
 		if r.ASN != "" {
 			fmt.Fprintf(&b, "  ASN: AS%s %s\n", r.ASN, r.Org)

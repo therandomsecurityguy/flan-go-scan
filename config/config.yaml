@@ -8,6 +8,16 @@ scan:
   udp: false
   udp_ports: "53,123,161,500"
   crawl_depth: 2
+subdomain:
+  port_profile: web
+  sources: "crtsh,anubis,digitorus,thc,commoncrawl,waybackarchive,rapiddns,hudsonrock,sitedossier,threatcrowd"
+  exclude_sources: ""
+  all_sources: false
+  recursive_only: false
+  max_time: 5
+  rate_limit: 0
+  threads: 10
+  provider_config: ""
 dns:
   ttl: 10m
 output:
