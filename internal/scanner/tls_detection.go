@@ -21,7 +21,7 @@ type TLSResult struct {
 	SelfSigned  bool      `json:"self_signed,omitempty"`
 }
 
-func InspectTLS(ctx context.Context, host string, port int, timeout time.Duration) *TLSResult {
+func InspectTLS(ctx context.Context, host string, port int, timeout time.Duration, verify bool) *TLSResult {
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	d := net.Dialer{Timeout: timeout}
 	conn, err := d.DialContext(ctx, "tcp", addr)
@@ -30,7 +30,8 @@ func InspectTLS(ctx context.Context, host string, port int, timeout time.Duratio
 	}
 	defer conn.Close()
 
-	tlsConn := tls.Client(conn, &tls.Config{InsecureSkipVerify: true})
+	tlsCfg := &tls.Config{InsecureSkipVerify: !verify}
+	tlsConn := tls.Client(conn, tlsCfg)
 	tlsConn.SetDeadline(time.Now().Add(timeout))
 	if err := tlsConn.Handshake(); err != nil {
 		return nil

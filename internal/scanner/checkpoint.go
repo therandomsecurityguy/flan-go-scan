@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Checkpoint struct {
@@ -29,10 +30,24 @@ func NewCheckpoint(path string) (*Checkpoint, error) {
 		filePath: abs,
 		Progress: make(map[string]map[int]bool),
 	}
+	cp.cleanupStaleTempFiles(filepath.Dir(abs))
 	if err := cp.Load(); err != nil {
 		return nil, err
 	}
 	return cp, nil
+}
+
+func (c *Checkpoint) cleanupStaleTempFiles(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	prefix := filepath.Base(c.filePath) + ".tmp."
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), prefix) {
+			os.Remove(filepath.Join(dir, entry.Name()))
+		}
+	}
 }
 
 func (c *Checkpoint) Load() error {
@@ -83,12 +98,19 @@ func (c *Checkpoint) Flush() error {
 	if err != nil {
 		return err
 	}
-	tmp := c.filePath + ".tmp"
+
+	tmp := c.filePath + ".tmp." + fmt.Sprintf("%d", time.Now().UnixNano())
 	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return err
 	}
+
+	if err := os.Rename(tmp, c.filePath); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+
 	c.dirty = false
-	return os.Rename(tmp, c.filePath)
+	return nil
 }
 
 func (c *Checkpoint) ShouldSkip(host string, port int) bool {
