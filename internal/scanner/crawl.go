@@ -199,7 +199,7 @@ var cookieTech = map[string]string{
 	"connect.sid":  "Node.js/Express",
 }
 
-func Crawl(ctx context.Context, scheme, ip, hostname string, port int, maxDepth int, timeout time.Duration, reqDelay time.Duration) ([]CrawlResult, *AppFingerprint) {
+func Crawl(ctx context.Context, scheme, ip, hostname string, port int, maxDepth int, timeout time.Duration, reqDelay time.Duration, verifyTLS bool) ([]CrawlResult, *AppFingerprint) {
 	displayHost := ip
 	if strings.Contains(ip, ":") {
 		displayHost = "[" + ip + "]"
@@ -210,7 +210,7 @@ func Crawl(ctx context.Context, scheme, ip, hostname string, port int, maxDepth 
 	if crawlTimeout > 8*time.Second {
 		crawlTimeout = 8 * time.Second
 	}
-	tlsCfg := &tls.Config{InsecureSkipVerify: true} //nolint:gosec
+	tlsCfg := &tls.Config{InsecureSkipVerify: !verifyTLS}
 	if hostname != "" && net.ParseIP(hostname) == nil {
 		tlsCfg.ServerName = hostname
 	}
@@ -289,7 +289,7 @@ func Crawl(ctx context.Context, scheme, ip, hostname string, port int, maxDepth 
 		if e.path == "/robots.txt" && cr.StatusCode == 200 && body != "" {
 			for _, disallowed := range parseRobotsTxt(body) {
 				if !visited[disallowed] {
-					slog.Info("robots.txt disallow entry (target for crawl)", "path", disallowed)
+					slog.Debug("robots.txt disallow entry added to crawl queue", "path", disallowed)
 					queue = append(queue, entry{disallowed, e.depth})
 				}
 			}

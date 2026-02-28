@@ -70,6 +70,7 @@ CONFIGURATION:
   --crawl                  crawl HTTP/HTTPS services for endpoints and sensitive paths
   --crawl-depth int        max crawl depth (default: 2)
   --tls-enum               enumerate supported TLS versions and cipher suites (~60 connections per TLS port)
+  --tls-verify             verify TLS certificates (default: skip verification)
   --asn                    look up ASN and organization for each host via Cymru DNS
   --context string         YAML file with asset context and policies for AI analysis
   --analyze                AI-powered analysis via Together API (requires TOGETHER_API_KEY)
@@ -89,15 +90,40 @@ EXAMPLES:
 `)
 }
 
+const (
+	maxPorts       = 10000
+	maxPortRange   = 1000
+	portNumPattern = "0123456789"
+)
+
 func parsePorts(portStr string) ([]int, error) {
+	if portStr == "" {
+		return nil, nil
+	}
+
+	portStr = strings.TrimSpace(portStr)
+	if portStr == "" {
+		return nil, nil
+	}
+
 	var ports []int
+	seen := make(map[int]bool)
+
 	for _, part := range strings.Split(portStr, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
+
+		if strings.ContainsAny(part, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*()_+-=[]{}|;':\"<>?") {
+			return nil, fmt.Errorf("invalid port specification %q: contains disallowed characters", part)
+		}
+
 		if strings.Contains(part, "-") {
 			bounds := strings.SplitN(part, "-", 2)
+			if len(bounds) != 2 {
+				return nil, fmt.Errorf("invalid port range format: %s", part)
+			}
 			start, err := strconv.Atoi(bounds[0])
 			if err != nil {
 				return nil, fmt.Errorf("invalid port range start %q: %w", bounds[0], err)
@@ -109,8 +135,15 @@ func parsePorts(portStr string) ([]int, error) {
 			if start > end || start < 1 || end > 65535 {
 				return nil, fmt.Errorf("invalid port range %d-%d", start, end)
 			}
+			rangeSize := end - start + 1
+			if rangeSize > maxPortRange {
+				return nil, fmt.Errorf("port range too large: %d ports (max %d)", rangeSize, maxPortRange)
+			}
 			for p := start; p <= end; p++ {
-				ports = append(ports, p)
+				if !seen[p] {
+					seen[p] = true
+					ports = append(ports, p)
+				}
 			}
 		} else {
 			p, err := strconv.Atoi(part)
@@ -120,7 +153,14 @@ func parsePorts(portStr string) ([]int, error) {
 			if p < 1 || p > 65535 {
 				return nil, fmt.Errorf("port out of range: %d", p)
 			}
-			ports = append(ports, p)
+			if !seen[p] {
+				seen[p] = true
+				ports = append(ports, p)
+			}
+		}
+
+		if len(ports) > maxPorts {
+			return nil, fmt.Errorf("too many ports: %d (max %d)", len(ports), maxPorts)
 		}
 	}
 	return ports, nil
@@ -176,6 +216,7 @@ func main() {
 	crawlFlag := flag.Bool("crawl", false, "")
 	crawlDepth := flag.Int("crawl-depth", 0, "")
 	tlsEnumFlag := flag.Bool("tls-enum", false, "")
+	tlsVerifyFlag := flag.Bool("tls-verify", false, "")
 	asnFlag := flag.Bool("asn", false, "")
 	contextFile := flag.String("context", "", "")
 	analyze := flag.Bool("analyze", false, "")
@@ -199,6 +240,12 @@ func main() {
 	if err != nil {
 		slog.Error("config error", "err", err)
 		os.Exit(1)
+	}
+
+	if os.Getenv("TOGETHER_API_KEY") != "" {
+		if err := scanner.ValidateAPIKey(); err != nil {
+			slog.Warn("Together API key validation failed", "err", err)
+		}
 	}
 
 	if set["crawl-depth"] && *crawlDepth > 0 {
@@ -417,7 +464,9 @@ func main() {
 		defer jsonlWriter.Close()
 	}
 
-	targets := resolveTargets(ctx, hosts, dnsCache, *asnFlag, cfg.Scan.Timeout, res)
+			targets := resolveTargets(ctx, hosts, dnsCache, *asnFlag, cfg.Scan.Timeout, res)
+
+	tlsVerify := *tlsVerifyFlag
 
 	if cfg.Scan.Discovery && !udpEnabled {
 		targets = discoverAliveTargets(ctx, targets, ports, cfg.Scan.Workers, cfg.Scan.Timeout)
@@ -599,8 +648,9 @@ func main() {
 					cdn,
 					cfg,
 					tcpScanOptions{
-						crawl:   *crawlFlag,
-						tlsEnum: *tlsEnumFlag,
+						crawl:      *crawlFlag,
+						tlsEnum:    *tlsEnumFlag,
+						tlsVerify:  tlsVerify,
 					},
 					target.ASN,
 					target.Org,
@@ -1206,8 +1256,9 @@ func enrichResultVulnerabilities(ctx context.Context, res *scanner.ScanResult, c
 }
 
 type tcpScanOptions struct {
-	crawl   bool
-	tlsEnum bool
+	crawl      bool
+	tlsEnum    bool
+	tlsVerify  bool
 }
 
 func scanTCPPort(
@@ -1222,6 +1273,9 @@ func scanTCPPort(
 	org string,
 	ptr string,
 ) *scanner.ScanResult {
+	if opts.tlsVerify {
+		slog.Info("TLS certificate verification enabled", "host", ip, "port", port)
+	}
 	if !scanner.IsTCPPortOpen(ctx, ip, port, cfg.Scan.Timeout) {
 		return nil
 	}
@@ -1268,14 +1322,14 @@ func scanTCPPort(
 	}
 	var tlsResult *scanner.TLSResult
 	if likelyTLS {
-		tlsResult = scanner.InspectTLS(ctx, ip, port, cfg.Scan.Timeout)
+		tlsResult = scanner.InspectTLS(ctx, ip, port, cfg.Scan.Timeout, opts.tlsVerify)
 	}
 	hasTLS := tlsResult != nil || likelyTLS
 
 	var endpoints []scanner.CrawlResult
 	var appFP *scanner.AppFingerprint
 	if opts.crawl && scanner.IsHTTPService(service, port, hasTLS) {
-		endpoints, appFP = scanner.Crawl(ctx, scanner.HTTPScheme(hasTLS), ip, hostname, port, cfg.Scan.CrawlDepth, cfg.Scan.Timeout, 100*time.Millisecond)
+		endpoints, appFP = scanner.Crawl(ctx, scanner.HTTPScheme(hasTLS), ip, hostname, port, cfg.Scan.CrawlDepth, cfg.Scan.Timeout, 100*time.Millisecond, opts.tlsVerify)
 	}
 
 	var secHeaders []scanner.HeaderFinding

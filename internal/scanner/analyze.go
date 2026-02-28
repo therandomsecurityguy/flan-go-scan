@@ -51,6 +51,28 @@ Prioritize findings by risk. Be concise and actionable. Focus on:
 
 Do not repeat raw scan data. Summarize and analyze.`
 
+func ValidateAPIKey() error {
+	apiKey := os.Getenv("TOGETHER_API_KEY")
+	if apiKey == "" {
+		return fmt.Errorf("TOGETHER_API_KEY not set")
+	}
+
+	if len(apiKey) < 10 {
+		return fmt.Errorf("TOGETHER_API_KEY appears invalid (too short)")
+	}
+
+	client := together.NewClient(option.WithAPIKey(apiKey))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := client.Models.List(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to validate TOGETHER_API_KEY: %w", err)
+	}
+
+	return nil
+}
+
 func Analyze(ctx context.Context, results []ScanResult, outputDir string, sc *ScanContext) (*AnalysisResult, error) {
 	apiKey := os.Getenv("TOGETHER_API_KEY")
 	if apiKey == "" {
