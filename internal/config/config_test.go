@@ -28,6 +28,21 @@ func TestLoadConfigMissingFileUsesDefaults(t *testing.T) {
 	if cfg.Subdomain.Threads != 10 {
 		t.Fatalf("unexpected default subdomain threads: %d", cfg.Subdomain.Threads)
 	}
+	if cfg.Scan.MaxTargets != 5000 {
+		t.Fatalf("unexpected default max targets: %d", cfg.Scan.MaxTargets)
+	}
+	if cfg.Scan.MaxPortsHost != 5000 {
+		t.Fatalf("unexpected default max ports per target: %d", cfg.Scan.MaxPortsHost)
+	}
+	if cfg.Scan.MaxDuration != 30*time.Minute {
+		t.Fatalf("unexpected default max duration: %v", cfg.Scan.MaxDuration)
+	}
+	if cfg.DNS.LookupTimeout != 3*time.Second {
+		t.Fatalf("unexpected default DNS lookup timeout: %v", cfg.DNS.LookupTimeout)
+	}
+	if len(cfg.DNS.FallbackResolvers) != 2 {
+		t.Fatalf("unexpected default fallback resolver count: %d", len(cfg.DNS.FallbackResolvers))
+	}
 }
 
 func TestLoadConfigFromFileOverridesDefaults(t *testing.T) {
@@ -37,6 +52,9 @@ func TestLoadConfigFromFileOverridesDefaults(t *testing.T) {
   timeout: 1s
   rate_limit: 20
   workers: 12
+  max_targets: 123
+  max_ports_per_target: 456
+  max_duration: 7m
 output:
   format: csv
   directory: ./out
@@ -44,6 +62,11 @@ subdomain:
   port_profile: full
   all_sources: true
   threads: 30
+dns:
+  resolver: 9.9.9.9:53
+  fallback_resolvers:
+    - "1.1.1.1:53"
+  lookup_timeout: 4s
 `
 	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -62,6 +85,15 @@ subdomain:
 	if cfg.Scan.Workers != 12 {
 		t.Fatalf("expected workers override, got %d", cfg.Scan.Workers)
 	}
+	if cfg.Scan.MaxTargets != 123 {
+		t.Fatalf("expected max_targets override, got %d", cfg.Scan.MaxTargets)
+	}
+	if cfg.Scan.MaxPortsHost != 456 {
+		t.Fatalf("expected max_ports_per_target override, got %d", cfg.Scan.MaxPortsHost)
+	}
+	if cfg.Scan.MaxDuration != 7*time.Minute {
+		t.Fatalf("expected max_duration override, got %v", cfg.Scan.MaxDuration)
+	}
 	if cfg.Output.Format != "csv" {
 		t.Fatalf("expected output format override, got %s", cfg.Output.Format)
 	}
@@ -76,5 +108,14 @@ subdomain:
 	}
 	if cfg.Subdomain.Threads != 30 {
 		t.Fatalf("expected subdomain threads override, got %d", cfg.Subdomain.Threads)
+	}
+	if cfg.DNS.Resolver != "9.9.9.9:53" {
+		t.Fatalf("expected dns resolver override, got %s", cfg.DNS.Resolver)
+	}
+	if len(cfg.DNS.FallbackResolvers) != 1 || cfg.DNS.FallbackResolvers[0] != "1.1.1.1:53" {
+		t.Fatalf("unexpected dns fallback resolver override: %v", cfg.DNS.FallbackResolvers)
+	}
+	if cfg.DNS.LookupTimeout != 4*time.Second {
+		t.Fatalf("expected dns lookup timeout override, got %v", cfg.DNS.LookupTimeout)
 	}
 }

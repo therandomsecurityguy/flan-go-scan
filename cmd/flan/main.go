@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"github.com/therandomsecurityguy/flan-go-scan/internal/dns"
 	"github.com/therandomsecurityguy/flan-go-scan/internal/output"
 	"github.com/therandomsecurityguy/flan-go-scan/internal/scanner"
+	"golang.org/x/sync/singleflight"
 )
 
 var version = "dev"
@@ -48,7 +50,7 @@ TARGET:
 
 PORTS:
   -p, -ports string        ports to scan (from config if not set)
-  --top-ports string       use top port list: 100 or 1000
+  --top-ports string       use top port list: 100, 1000, 2000, or 5000
   --subdomain-ports string domain mode port profile: web, standard, or full (default: web)
 
 CONFIGURATION:
@@ -91,9 +93,8 @@ EXAMPLES:
 }
 
 const (
-	maxPorts       = 10000
-	maxPortRange   = 1000
-	portNumPattern = "0123456789"
+	maxPorts     = 10000
+	maxPortRange = 1000
 )
 
 func parsePorts(portStr string) ([]int, error) {
@@ -115,14 +116,16 @@ func parsePorts(portStr string) ([]int, error) {
 			continue
 		}
 
-		if strings.ContainsAny(part, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*()_+-=[]{}|;':\"<>?") {
-			return nil, fmt.Errorf("invalid port specification %q: contains disallowed characters", part)
-		}
-
 		if strings.Contains(part, "-") {
+			if strings.Count(part, "-") != 1 {
+				return nil, fmt.Errorf("invalid port range format: %s", part)
+			}
 			bounds := strings.SplitN(part, "-", 2)
 			if len(bounds) != 2 {
 				return nil, fmt.Errorf("invalid port range format: %s", part)
+			}
+			if !isNumericPortToken(bounds[0]) || !isNumericPortToken(bounds[1]) {
+				return nil, fmt.Errorf("invalid port range: %s", part)
 			}
 			start, err := strconv.Atoi(bounds[0])
 			if err != nil {
@@ -146,6 +149,9 @@ func parsePorts(portStr string) ([]int, error) {
 				}
 			}
 		} else {
+			if !isNumericPortToken(part) {
+				return nil, fmt.Errorf("invalid port %q", part)
+			}
 			p, err := strconv.Atoi(part)
 			if err != nil {
 				return nil, fmt.Errorf("invalid port %q: %w", part, err)
@@ -164,6 +170,18 @@ func parsePorts(portStr string) ([]int, error) {
 		}
 	}
 	return ports, nil
+}
+
+func isNumericPortToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func readHosts(filename string) ([]string, error) {
@@ -241,11 +259,10 @@ func main() {
 		slog.Error("config error", "err", err)
 		os.Exit(1)
 	}
-
-	if os.Getenv("TOGETHER_API_KEY") != "" {
-		if err := scanner.ValidateAPIKey(); err != nil {
-			slog.Warn("Together API key validation failed", "err", err)
-		}
+	togetherAPIKey := strings.TrimSpace(os.Getenv("TOGETHER_API_KEY"))
+	scanStarted := time.Now()
+	if res == "" {
+		res = strings.TrimSpace(cfg.DNS.Resolver)
 	}
 
 	if set["crawl-depth"] && *crawlDepth > 0 {
@@ -299,16 +316,31 @@ func main() {
 		}
 		cfg.Output.Format = "jsonl"
 	}
+	if togetherAPIKey != "" && (*analyze || prettyMode) {
+		if err := scanner.ValidateAPIKey(); err != nil {
+			if isTransientAPIValidationError(err) {
+				slog.Debug("Together API key validation skipped due transient error", "err", err)
+			} else {
+				slog.Warn("Together API key validation failed", "err", err)
+			}
+		}
+	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	baseCtx, stop := context.WithCancel(context.Background())
+	defer stop()
+	ctx := baseCtx
+	if cfg.Scan.MaxDuration > 0 {
+		timeoutCtx, cancelTimeout := context.WithTimeout(baseCtx, cfg.Scan.MaxDuration)
+		defer cancelTimeout()
+		ctx = timeoutCtx
+	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		sig := <-sigCh
 		slog.Warn("received signal, shutting down", "signal", sig)
-		cancel()
+		stop()
 	}()
 
 	var hosts []string
@@ -433,14 +465,19 @@ func main() {
 		slog.Error("no hosts to scan, provide -t, -d, or -l")
 		os.Exit(1)
 	}
+	inputTargets := len(hosts)
 
 	ports, err := selectScanPorts(dom != "", set, *topPorts, portStr, cfg)
 	if err != nil {
 		slog.Error("invalid port configuration", "err", err)
 		os.Exit(1)
 	}
+	if err := enforceScanGuardrails(len(hosts), len(ports), cfg); err != nil {
+		slog.Error("scan blocked by guardrails", "err", err)
+		os.Exit(1)
+	}
 
-	dnsCache := dns.NewDNSCache(cfg.DNS.TTL)
+	dnsCache := dns.NewDNSCache(cfg.DNS.TTL, cfg.DNS.LookupTimeout, res, cfg.DNS.FallbackResolvers)
 	if cfg.Scan.RateLimit <= 0 {
 		slog.Warn("invalid scan.rate_limit; clamping to 1 request/sec", "rate_limit", cfg.Scan.RateLimit)
 	}
@@ -464,7 +501,12 @@ func main() {
 		defer jsonlWriter.Close()
 	}
 
-			targets := resolveTargets(ctx, hosts, dnsCache, *asnFlag, cfg.Scan.Timeout, res)
+	targets := resolveTargets(ctx, hosts, dnsCache, *asnFlag, cfg.Scan.Timeout, res, cfg.Scan.Workers)
+	if err := enforceScanGuardrails(len(targets), len(ports), cfg); err != nil {
+		slog.Error("scan blocked by guardrails after DNS resolution", "err", err)
+		os.Exit(1)
+	}
+	resolvedTargets := len(targets)
 
 	tlsVerify := *tlsVerifyFlag
 
@@ -473,10 +515,25 @@ func main() {
 	} else if cfg.Scan.Discovery && udpEnabled {
 		slog.Info("skipping discovery filter for UDP mode to avoid dropping UDP-only hosts", "targets", len(targets))
 	}
+	aliveTargets := len(targets)
+	metaInput := scanMetadataInput{
+		mode:            scanMode(dom != ""),
+		inputTargets:    inputTargets,
+		resolvedTargets: resolvedTargets,
+		aliveTargets:    aliveTargets,
+		portsPerTarget:  len(ports),
+		rateLimit:       cfg.Scan.RateLimit,
+		workers:         cfg.Scan.Workers,
+		guardMaxTargets: cfg.Scan.MaxTargets,
+		guardMaxPorts:   cfg.Scan.MaxPortsHost,
+		guardMaxDur:     cfg.Scan.MaxDuration,
+		dnsStats:        dnsCache.Stats(),
+	}
 
 	if len(targets) == 0 {
 		slog.Info("no live hosts found")
-		os.Exit(0)
+		writeScanMetadata(cfg.Output.Directory, buildScanMetadata(scanStarted, time.Now(), ctx.Err(), metaInput))
+		return
 	}
 
 	cdnDetector := scanner.NewCDNDetector()
@@ -544,6 +601,7 @@ func main() {
 
 	var collectWg sync.WaitGroup
 	var results []scanner.ScanResult
+	storeResults := shouldStoreResults(jsonlWriter, *analyze, prettyMode, scanCtx, togetherAPIKey)
 
 	collectWg.Add(1)
 	go func() {
@@ -557,7 +615,7 @@ func main() {
 			if prettyMode {
 				printResult(res)
 			}
-			if jsonlWriter == nil || *analyze || prettyMode {
+			if storeResults {
 				results = append(results, res)
 			}
 		}
@@ -571,6 +629,7 @@ func main() {
 	remainingByTarget := make(map[string]*atomic.Int64, len(targets))
 	targetOrder := make([]string, 0, len(targets))
 	maxHostPorts := 0
+	portsScheduled := 0
 
 	for _, target := range targets {
 		if ctx.Err() != nil {
@@ -598,6 +657,7 @@ func main() {
 		targetPorts[targetKey] = hostPorts
 		targetMeta[targetKey] = target
 		targetOrder = append(targetOrder, targetKey)
+		portsScheduled += len(hostPorts)
 		remaining := &atomic.Int64{}
 		remaining.Store(int64(len(hostPorts)))
 		remainingByTarget[targetKey] = remaining
@@ -648,9 +708,9 @@ func main() {
 					cdn,
 					cfg,
 					tcpScanOptions{
-						crawl:      *crawlFlag,
-						tlsEnum:    *tlsEnumFlag,
-						tlsVerify:  tlsVerify,
+						crawl:     *crawlFlag,
+						tlsEnum:   *tlsEnumFlag,
+						tlsVerify: tlsVerify,
 					},
 					target.ASN,
 					target.Org,
@@ -765,7 +825,7 @@ func main() {
 		}
 	}
 
-	if prettyMode && !*analyze && os.Getenv("TOGETHER_API_KEY") != "" && len(results) > 0 {
+	if prettyMode && !*analyze && togetherAPIKey != "" && len(results) > 0 {
 		fmt.Print("\033[2m  Analyzing...\033[0m\r")
 		brief, err := scanner.AnalyzeBrief(ctx, results, scanCtx)
 		fmt.Print("                \r")
@@ -790,6 +850,12 @@ func main() {
 			fmt.Println()
 		}
 	}
+
+	metaInput.portsScheduled = portsScheduled
+	metaInput.portsScanned = progress.PortsScanned.Load()
+	metaInput.servicesFound = progress.ServicesFound.Load()
+	metaInput.dnsStats = dnsCache.Stats()
+	writeScanMetadata(cfg.Output.Directory, buildScanMetadata(scanStarted, time.Now(), ctx.Err(), metaInput))
 
 	if jsonlWriter != nil {
 		if jsonlWriter.Filename != "" {
@@ -1045,13 +1111,17 @@ func selectScanPorts(isDomainMode bool, set map[string]bool, topPortsValue, port
 		return append([]int(nil), scanner.TopPorts100...), nil
 	case "1000":
 		return append([]int(nil), scanner.TopPorts1000...), nil
+	case "2000":
+		return append([]int(nil), scanner.TopPorts2000...), nil
+	case "5000":
+		return append([]int(nil), scanner.TopPorts5000...), nil
 	case "":
 		if portStr != "" {
 			return parsePorts(portStr)
 		}
 		return parsePorts(cfg.Scan.Ports)
 	default:
-		return nil, fmt.Errorf("invalid --top-ports value %q, use 100 or 1000", topPortsValue)
+		return nil, fmt.Errorf("invalid --top-ports value %q, use 100, 1000, 2000, or 5000", topPortsValue)
 	}
 }
 
@@ -1084,64 +1154,125 @@ func resolveTargets(
 	asnEnabled bool,
 	timeout time.Duration,
 	resolver string,
+	workers int,
 ) []scanTarget {
-	asnFor := make(map[string]string)
-	orgFor := make(map[string]string)
-	ptrFor := make(map[string]string)
-	seen := make(map[string]struct{})
-	var targets []scanTarget
+	if workers <= 0 {
+		workers = 1
+	}
+	if workers > len(hosts) {
+		workers = len(hosts)
+	}
+	if workers == 0 {
+		return nil
+	}
 
-	for _, rawHost := range hosts {
-		host := strings.TrimSpace(rawHost)
-		if host == "" {
-			continue
-		}
-		resolvedIPs, err := dnsCache.Lookup(host)
-		if err != nil {
-			slog.Warn("DNS lookup failed", "host", host, "err", err)
-			continue
-		}
+	type ipMetadata struct {
+		asn string
+		org string
+		ptr string
+	}
 
-		hostname := ""
-		if net.ParseIP(host) == nil {
-			hostname = strings.TrimSuffix(strings.ToLower(host), ".")
+	var ipMetaCache sync.Map
+	var ipMetaSF singleflight.Group
+	getIPMetadata := func(ip string) ipMetadata {
+		if cached, ok := ipMetaCache.Load(ip); ok {
+			return cached.(ipMetadata)
 		}
-
-		for _, ip := range resolvedIPs {
-			ipStr := ip.String()
-			targetKey := targetCheckpointKey(hostname, ipStr)
-			if _, exists := seen[targetKey]; exists {
-				continue
+		value, _, _ := ipMetaSF.Do(ip, func() (interface{}, error) {
+			if cached, ok := ipMetaCache.Load(ip); ok {
+				return cached, nil
 			}
-			seen[targetKey] = struct{}{}
-
-			target := scanTarget{
-				Hostname:      hostname,
-				IP:            ipStr,
-				CheckpointKey: targetKey,
+			asn, org := scanner.LookupASN(ctx, ip, timeout, resolver)
+			ptr := ""
+			if ptrs := scanner.LookupPTR(ip); len(ptrs) > 0 {
+				ptr = ptrs[0]
 			}
+			meta := ipMetadata{asn: asn, org: org, ptr: ptr}
+			ipMetaCache.Store(ip, meta)
+			return meta, nil
+		})
+		if value == nil {
+			return ipMetadata{}
+		}
+		return value.(ipMetadata)
+	}
 
-			if asnEnabled {
-				if _, exists := asnFor[ipStr]; !exists {
-					asn, org := scanner.LookupASN(ctx, ipStr, timeout, resolver)
-					if asn != "" {
-						asnFor[ipStr] = asn
-						orgFor[ipStr] = org
+	hostCh := make(chan string, workers)
+	targetCh := make(chan scanTarget, workers*4)
+	var workersWg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		workersWg.Add(1)
+		go func() {
+			defer workersWg.Done()
+			for rawHost := range hostCh {
+				if ctx.Err() != nil {
+					return
+				}
+				host := strings.TrimSpace(rawHost)
+				if host == "" {
+					continue
+				}
+				resolvedIPs, err := dnsCache.Lookup(host)
+				if err != nil {
+					slog.Warn("DNS lookup failed", "host", host, "err", err)
+					continue
+				}
+
+				hostname := ""
+				if net.ParseIP(host) == nil {
+					hostname = strings.TrimSuffix(strings.ToLower(host), ".")
+				}
+
+				for _, ip := range resolvedIPs {
+					ipStr := ip.String()
+					target := scanTarget{
+						Hostname:      hostname,
+						IP:            ipStr,
+						CheckpointKey: targetCheckpointKey(hostname, ipStr),
+					}
+					if asnEnabled {
+						meta := getIPMetadata(ipStr)
+						target.ASN = meta.asn
+						target.Org = meta.org
+						target.PTR = meta.ptr
+					}
+
+					select {
+					case <-ctx.Done():
+						return
+					case targetCh <- target:
 					}
 				}
-				if _, exists := ptrFor[ipStr]; !exists {
-					if ptrs := scanner.LookupPTR(ipStr); len(ptrs) > 0 {
-						ptrFor[ipStr] = ptrs[0]
-					}
-				}
-				target.ASN = asnFor[ipStr]
-				target.Org = orgFor[ipStr]
-				target.PTR = ptrFor[ipStr]
 			}
+		}()
+	}
 
-			targets = append(targets, target)
+sendLoop:
+	for _, host := range hosts {
+		select {
+		case <-ctx.Done():
+			break sendLoop
+		case hostCh <- host:
 		}
 	}
+	close(hostCh)
+	go func() {
+		workersWg.Wait()
+		close(targetCh)
+	}()
+
+	seen := make(map[string]struct{})
+	targets := make([]scanTarget, 0, len(hosts))
+	for target := range targetCh {
+		if _, exists := seen[target.CheckpointKey]; exists {
+			continue
+		}
+		seen[target.CheckpointKey] = struct{}{}
+		targets = append(targets, target)
+	}
+	sort.Slice(targets, func(i, j int) bool {
+		return targets[i].CheckpointKey < targets[j].CheckpointKey
+	})
 	return targets
 }
 
@@ -1256,9 +1387,9 @@ func enrichResultVulnerabilities(ctx context.Context, res *scanner.ScanResult, c
 }
 
 type tcpScanOptions struct {
-	crawl      bool
-	tlsEnum    bool
-	tlsVerify  bool
+	crawl     bool
+	tlsEnum   bool
+	tlsVerify bool
 }
 
 func scanTCPPort(
@@ -1273,9 +1404,6 @@ func scanTCPPort(
 	org string,
 	ptr string,
 ) *scanner.ScanResult {
-	if opts.tlsVerify {
-		slog.Info("TLS certificate verification enabled", "host", ip, "port", port)
-	}
 	if !scanner.IsTCPPortOpen(ctx, ip, port, cfg.Scan.Timeout) {
 		return nil
 	}
@@ -1322,7 +1450,7 @@ func scanTCPPort(
 	}
 	var tlsResult *scanner.TLSResult
 	if likelyTLS {
-		tlsResult = scanner.InspectTLS(ctx, ip, port, cfg.Scan.Timeout, opts.tlsVerify)
+		tlsResult = scanner.InspectTLS(ctx, ip, hostname, port, cfg.Scan.Timeout, opts.tlsVerify)
 	}
 	hasTLS := tlsResult != nil || likelyTLS
 
@@ -1334,12 +1462,12 @@ func scanTCPPort(
 
 	var secHeaders []scanner.HeaderFinding
 	if scanner.IsHTTPService(service, port, hasTLS) {
-		secHeaders = scanner.InspectHeaders(ctx, scanner.HTTPScheme(hasTLS), ip, hostname, port, cfg.Scan.Timeout)
+		secHeaders = scanner.InspectHeaders(ctx, scanner.HTTPScheme(hasTLS), ip, hostname, port, cfg.Scan.Timeout, opts.tlsVerify)
 	}
 
 	var tlsEnum *scanner.TLSEnum
 	if opts.tlsEnum && hasTLS {
-		tlsEnum = scanner.EnumerateTLS(ctx, ip, hostname, port, cfg.Scan.Timeout)
+		tlsEnum = scanner.EnumerateTLS(ctx, ip, hostname, port, cfg.Scan.Timeout, opts.tlsVerify)
 	}
 
 	return &scanner.ScanResult{
@@ -1395,4 +1523,105 @@ func pick(set map[string]bool, long string, longVal *string, short string, short
 		return *shortVal
 	}
 	return def
+}
+
+func shouldStoreResults(jsonlWriter *output.JSONLWriter, analyze bool, prettyMode bool, scanCtx *scanner.ScanContext, togetherAPIKey string) bool {
+	if jsonlWriter == nil || analyze || scanCtx != nil {
+		return true
+	}
+	return prettyMode && strings.TrimSpace(togetherAPIKey) != ""
+}
+
+func isTransientAPIValidationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "context deadline exceeded") ||
+		strings.Contains(msg, "timeout") ||
+		strings.Contains(msg, "temporary") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "no such host")
+}
+
+func enforceScanGuardrails(targetCount, portCount int, cfg *config.Config) error {
+	if cfg.Scan.MaxTargets > 0 && targetCount > cfg.Scan.MaxTargets {
+		return fmt.Errorf("target count %d exceeds max_targets %d", targetCount, cfg.Scan.MaxTargets)
+	}
+	if cfg.Scan.MaxPortsHost > 0 && portCount > cfg.Scan.MaxPortsHost {
+		return fmt.Errorf("ports per target %d exceeds max_ports_per_target %d", portCount, cfg.Scan.MaxPortsHost)
+	}
+	return nil
+}
+
+func scanMode(domainMode bool) string {
+	if domainMode {
+		return "domain"
+	}
+	return "target"
+}
+
+type scanMetadataInput struct {
+	mode            string
+	inputTargets    int
+	resolvedTargets int
+	aliveTargets    int
+	portsPerTarget  int
+	portsScheduled  int
+	portsScanned    int64
+	servicesFound   int64
+	rateLimit       int
+	workers         int
+	guardMaxTargets int
+	guardMaxPorts   int
+	guardMaxDur     time.Duration
+	dnsStats        dns.DNSStats
+}
+
+func buildScanMetadata(startedAt, completedAt time.Time, runErr error, in scanMetadataInput) output.ScanMetadata {
+	metadata := output.ScanMetadata{
+		StartedAt:       startedAt.Format(time.RFC3339),
+		CompletedAt:     completedAt.Format(time.RFC3339),
+		DurationMS:      completedAt.Sub(startedAt).Milliseconds(),
+		Mode:            in.mode,
+		InputTargets:    in.inputTargets,
+		ResolvedTargets: in.resolvedTargets,
+		AliveTargets:    in.aliveTargets,
+		PortsPerTarget:  in.portsPerTarget,
+		PortsScheduled:  in.portsScheduled,
+		PortsScanned:    in.portsScanned,
+		ServicesFound:   in.servicesFound,
+		RateLimit:       in.rateLimit,
+		Workers:         in.workers,
+		Guardrails: output.GuardrailsMetadata{
+			MaxTargets:        in.guardMaxTargets,
+			MaxPortsPerTarget: in.guardMaxPorts,
+			MaxDuration:       in.guardMaxDur.String(),
+		},
+		DNS: output.DNSMetadata{
+			Lookups:          in.dnsStats.Lookups,
+			CacheHits:        in.dnsStats.CacheHits,
+			CacheMisses:      in.dnsStats.CacheMisses,
+			PrimaryFailures:  in.dnsStats.PrimaryFailures,
+			FallbackAttempts: in.dnsStats.FallbackAttempts,
+			FallbackSuccess:  in.dnsStats.FallbackSuccess,
+			LookupFailures:   in.dnsStats.LookupFailures,
+		},
+	}
+	if runErr != nil {
+		metadata.Cancelled = true
+		metadata.CancelReason = runErr.Error()
+	}
+	return metadata
+}
+
+func writeScanMetadata(outputDir string, metadata output.ScanMetadata) {
+	path, err := output.WriteScanMetadata(outputDir, metadata)
+	if err != nil {
+		slog.Warn("failed to write scan metadata", "err", err)
+		return
+	}
+	if path != "" {
+		slog.Info("scan metadata written", "path", path)
+	}
 }

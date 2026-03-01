@@ -18,6 +18,9 @@ type Config struct {
 		UDP           bool          `mapstructure:"udp"`
 		UDPPorts      string        `mapstructure:"udp_ports"`
 		CrawlDepth    int           `mapstructure:"crawl_depth"`
+		MaxTargets    int           `mapstructure:"max_targets"`
+		MaxPortsHost  int           `mapstructure:"max_ports_per_target"`
+		MaxDuration   time.Duration `mapstructure:"max_duration"`
 	} `mapstructure:"scan"`
 	Subdomain struct {
 		PortProfile    string `mapstructure:"port_profile"`
@@ -31,7 +34,10 @@ type Config struct {
 		ProviderConfig string `mapstructure:"provider_config"`
 	} `mapstructure:"subdomain"`
 	DNS struct {
-		TTL time.Duration `mapstructure:"ttl"`
+		TTL               time.Duration `mapstructure:"ttl"`
+		Resolver          string        `mapstructure:"resolver"`
+		FallbackResolvers []string      `mapstructure:"fallback_resolvers"`
+		LookupTimeout     time.Duration `mapstructure:"lookup_timeout"`
 	} `mapstructure:"dns"`
 	Output struct {
 		Format    string `mapstructure:"format"`
@@ -53,6 +59,9 @@ func defaults() *Config {
 	cfg.Scan.UDP = false
 	cfg.Scan.UDPPorts = "53,123,161,500"
 	cfg.Scan.CrawlDepth = 2
+	cfg.Scan.MaxTargets = 5000
+	cfg.Scan.MaxPortsHost = 5000
+	cfg.Scan.MaxDuration = 30 * time.Minute
 	cfg.Subdomain.PortProfile = "web"
 	cfg.Subdomain.Sources = "crtsh,anubis,digitorus,thc,commoncrawl,waybackarchive,rapiddns,hudsonrock,sitedossier,threatcrowd"
 	cfg.Subdomain.ExcludeSources = ""
@@ -63,6 +72,9 @@ func defaults() *Config {
 	cfg.Subdomain.Threads = 10
 	cfg.Subdomain.ProviderConfig = ""
 	cfg.DNS.TTL = 10 * time.Minute
+	cfg.DNS.Resolver = ""
+	cfg.DNS.FallbackResolvers = []string{"1.1.1.1:53", "8.8.8.8:53"}
+	cfg.DNS.LookupTimeout = 3 * time.Second
 	cfg.Output.Format = "jsonl"
 	cfg.Output.Directory = "-"
 	cfg.Checkpoint.File = "scan-state.json"
@@ -81,6 +93,12 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if err := viper.Unmarshal(cfg); err != nil {
 		return nil, err
+	}
+	if viper.IsSet("dns.fallback_resolvers") {
+		var resolvers []string
+		if err := viper.UnmarshalKey("dns.fallback_resolvers", &resolvers); err == nil {
+			cfg.DNS.FallbackResolvers = resolvers
+		}
 	}
 	return cfg, nil
 }

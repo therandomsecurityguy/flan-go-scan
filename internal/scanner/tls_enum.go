@@ -27,7 +27,7 @@ var tlsVersionList = []struct {
 	{tls.VersionTLS13, "TLS1.3", false},
 }
 
-func EnumerateTLS(ctx context.Context, host, hostname string, port int, timeout time.Duration) *TLSEnum {
+func EnumerateTLS(ctx context.Context, host, hostname string, port int, timeout time.Duration, verify bool) *TLSEnum {
 	if hostname == "" {
 		hostname = host
 	}
@@ -39,7 +39,7 @@ func EnumerateTLS(ctx context.Context, host, hostname string, port int, timeout 
 		if ctx.Err() != nil {
 			break
 		}
-		if probeTLSVersion(addr, hostname, v.version, timeout) {
+		if probeTLSVersion(addr, hostname, v.version, timeout, verify) {
 			result.SupportedVersions = append(result.SupportedVersions, v.name)
 			if v.weak {
 				result.WeakVersions = append(result.WeakVersions, v.name)
@@ -55,7 +55,7 @@ func EnumerateTLS(ctx context.Context, host, hostname string, port int, timeout 
 			if ctx.Err() != nil {
 				break
 			}
-			if probeCipher(addr, hostname, cs.ID, timeout) {
+			if probeCipher(addr, hostname, cs.ID, timeout, verify) {
 				result.CipherSuites = append(result.CipherSuites, cs.Name)
 				if isWeakCipher(cs.Name) {
 					result.WeakCiphers = append(result.WeakCiphers, cs.Name)
@@ -70,11 +70,11 @@ func EnumerateTLS(ctx context.Context, host, hostname string, port int, timeout 
 	return result
 }
 
-func probeTLSVersion(addr, hostname string, version uint16, timeout time.Duration) bool {
+func probeTLSVersion(addr, hostname string, version uint16, timeout time.Duration, verify bool) bool {
 	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: timeout}, "tcp", addr, &tls.Config{
 		MinVersion:         version,
 		MaxVersion:         version,
-		InsecureSkipVerify: true, //nolint:gosec
+		InsecureSkipVerify: !verify,
 		ServerName:         hostname,
 	})
 	if err != nil {
@@ -84,12 +84,12 @@ func probeTLSVersion(addr, hostname string, version uint16, timeout time.Duratio
 	return true
 }
 
-func probeCipher(addr, hostname string, cipher uint16, timeout time.Duration) bool {
+func probeCipher(addr, hostname string, cipher uint16, timeout time.Duration, verify bool) bool {
 	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: timeout}, "tcp", addr, &tls.Config{
 		MinVersion:         tls.VersionTLS12,
 		MaxVersion:         tls.VersionTLS12,
 		CipherSuites:       []uint16{cipher},
-		InsecureSkipVerify: true, //nolint:gosec
+		InsecureSkipVerify: !verify,
 		ServerName:         hostname,
 	})
 	if err != nil {

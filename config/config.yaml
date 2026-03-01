@@ -8,6 +8,9 @@ scan:
   udp: false
   udp_ports: "53,123,161,500"
   crawl_depth: 2
+  max_targets: 5000
+  max_ports_per_target: 5000
+  max_duration: 30m
 subdomain:
   port_profile: web
   sources: "crtsh,anubis,digitorus,thc,commoncrawl,waybackarchive,rapiddns,hudsonrock,sitedossier,threatcrowd"
@@ -20,6 +23,11 @@ subdomain:
   provider_config: ""
 dns:
   ttl: 10m
+  resolver: ""
+  fallback_resolvers:
+    - "1.1.1.1:53"
+    - "8.8.8.8:53"
+  lookup_timeout: 3s
 output:
   format: jsonl
   directory: ./reports

@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  go-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt check
+        shell: bash
+        run: |
+          files="$(find . -name '*.go' -not -path './vendor/*' -print0 | xargs -0 gofmt -l)"
+          if [[ -n "${files}" ]]; then
+            echo "These files are not gofmt-formatted:"
+            echo "${files}"
+            exit 1
+          fi
+
+      - name: go test ./...
+        run: go test ./...
+
+      - name: go test -race ./...
+        run: go test -race ./...
+
+      - name: go test ./... -cover
+        run: go test ./... -cover
+
+      - name: go vet ./...
+        run: go vet ./...
+
+      - name: go build -o flan ./cmd/flan
+        run: go build -o flan ./cmd/flan
