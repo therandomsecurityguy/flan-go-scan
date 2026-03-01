@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/html"
@@ -182,6 +183,12 @@ var pathTech = map[string]string{
 	"/nagios/":               "Nagios",
 }
 
+var httpClientPool = sync.Pool{
+	New: func() interface{} {
+		return &http.Client{}
+	},
+}
+
 var cookieTech = map[string]string{
 	"wordpress_":   "WordPress",
 	"wp-settings":  "WordPress",
@@ -214,15 +221,15 @@ func Crawl(ctx context.Context, scheme, ip, hostname string, port int, maxDepth 
 	if hostname != "" && net.ParseIP(hostname) == nil {
 		tlsCfg.ServerName = hostname
 	}
-	client := &http.Client{
-		Timeout: crawlTimeout,
-		Transport: &http.Transport{
-			TLSClientConfig: tlsCfg,
-		},
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
+	client := httpClientPool.Get().(*http.Client)
+	client.Timeout = crawlTimeout
+	client.Transport = &http.Transport{
+		TLSClientConfig: tlsCfg,
 	}
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	defer httpClientPool.Put(client)
 
 	type entry struct {
 		path  string
