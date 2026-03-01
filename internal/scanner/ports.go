@@ -107,3 +107,39 @@ var TopPorts1000 = []int{
 	55600, 56737, 56738, 57294, 57797, 58080, 60020, 60443, 61532, 61900,
 	62078, 63331, 64623, 64680, 65000, 65129, 65389,
 }
+
+var TopPorts5000 = buildExpandedTopPorts(5000)
+
+var TopPorts2000 = append([]int(nil), TopPorts5000[:2000]...)
+
+func buildExpandedTopPorts(size int) []int {
+	ports := make([]int, 0, size)
+	seen := make(map[int]struct{}, size)
+
+	for _, port := range TopPorts1000 {
+		if port < 1 || port > 65535 {
+			continue
+		}
+		if _, exists := seen[port]; exists {
+			continue
+		}
+		seen[port] = struct{}{}
+		ports = append(ports, port)
+		if len(ports) == size {
+			return ports
+		}
+	}
+
+	for port := 1; port <= 65535; port++ {
+		if _, exists := seen[port]; exists {
+			continue
+		}
+		seen[port] = struct{}{}
+		ports = append(ports, port)
+		if len(ports) == size {
+			return ports
+		}
+	}
+
+	return ports
+}

@@ -62,10 +62,10 @@ func ValidateAPIKey() error {
 	}
 
 	client := together.NewClient(option.WithAPIKey(apiKey))
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	_, err := client.Models.List(ctx)
+	_, err := client.Models.List(ctx, together.ModelListParams{})
 	if err != nil {
 		return fmt.Errorf("failed to validate TOGETHER_API_KEY: %w", err)
 	}

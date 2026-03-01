@@ -2,10 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/therandomsecurityguy/flan-go-scan/internal/config"
+	"github.com/therandomsecurityguy/flan-go-scan/internal/output"
 	"github.com/therandomsecurityguy/flan-go-scan/internal/scanner"
 )
 
@@ -25,6 +28,15 @@ func TestParsePorts(t *testing.T) {
 func TestParsePortsRejectsInvalidRange(t *testing.T) {
 	if _, err := parsePorts("0-10"); err == nil {
 		t.Fatal("expected invalid range to return an error")
+	}
+}
+
+func TestParsePortsRejectsInvalidCharacters(t *testing.T) {
+	if _, err := parsePorts("80,abc"); err == nil {
+		t.Fatal("expected invalid characters to return an error")
+	}
+	if _, err := parsePorts("80-90-100"); err == nil {
+		t.Fatal("expected malformed range to return an error")
 	}
 }
 
@@ -92,6 +104,28 @@ func TestSelectScanPortsDomainProfileOverrideByTopPorts(t *testing.T) {
 	}
 }
 
+func TestSelectScanPortsTopPortsProfiles(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Scan.Ports = "22,80"
+	cfg.Subdomain.PortProfile = "web"
+
+	tests := map[string]int{
+		"1000": len(scanner.TopPorts1000),
+		"2000": len(scanner.TopPorts2000),
+		"5000": len(scanner.TopPorts5000),
+	}
+
+	for value, expected := range tests {
+		ports, err := selectScanPorts(true, map[string]bool{"top-ports": true}, value, "", cfg)
+		if err != nil {
+			t.Fatalf("selectScanPorts(%s) returned error: %v", value, err)
+		}
+		if len(ports) != expected {
+			t.Fatalf("unexpected top-ports selection length for %s: got %d want %d", value, len(ports), expected)
+		}
+	}
+}
+
 func TestSelectScanPortsInvalidDomainProfile(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Scan.Ports = "22,80"
@@ -120,5 +154,52 @@ func TestHeaderInspectionEligible(t *testing.T) {
 	eligible, status = headerInspectionEligible(scanner.ScanResult{Metadata: notFoundMeta})
 	if eligible || status != 404 {
 		t.Fatalf("expected ineligible for 404, got eligible=%v status=%d", eligible, status)
+	}
+}
+
+func TestEnforceScanGuardrails(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Scan.MaxTargets = 10
+	cfg.Scan.MaxPortsHost = 100
+	cfg.Scan.MaxDuration = 5 * time.Minute
+
+	if err := enforceScanGuardrails(5, 80, cfg); err != nil {
+		t.Fatalf("expected guardrails pass, got %v", err)
+	}
+	if err := enforceScanGuardrails(11, 80, cfg); err == nil {
+		t.Fatal("expected target guardrail violation")
+	}
+	if err := enforceScanGuardrails(5, 101, cfg); err == nil {
+		t.Fatal("expected port guardrail violation")
+	}
+}
+
+func TestShouldStoreResults(t *testing.T) {
+	if !shouldStoreResults(nil, false, false, nil, "") {
+		t.Fatal("expected storing results when no jsonl writer is used")
+	}
+	if !shouldStoreResults(&output.JSONLWriter{}, true, false, nil, "") {
+		t.Fatal("expected storing results when --analyze is enabled")
+	}
+	if !shouldStoreResults(&output.JSONLWriter{}, false, false, &scanner.ScanContext{}, "") {
+		t.Fatal("expected storing results when policy context is loaded")
+	}
+	if shouldStoreResults(&output.JSONLWriter{}, false, true, nil, "") {
+		t.Fatal("did not expect storing results in pretty mode without Together API key")
+	}
+	if !shouldStoreResults(&output.JSONLWriter{}, false, true, nil, "key-set") {
+		t.Fatal("expected storing results in pretty mode with Together API key")
+	}
+}
+
+func TestIsTransientAPIValidationError(t *testing.T) {
+	if !isTransientAPIValidationError(fmt.Errorf("failed: context deadline exceeded")) {
+		t.Fatal("expected deadline errors to be transient")
+	}
+	if !isTransientAPIValidationError(fmt.Errorf("dial tcp: connection refused")) {
+		t.Fatal("expected connection errors to be transient")
+	}
+	if isTransientAPIValidationError(fmt.Errorf("failed to validate TOGETHER_API_KEY: unauthorized")) {
+		t.Fatal("did not expect authorization failures to be transient")
 	}
 }

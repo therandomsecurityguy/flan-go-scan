@@ -10,6 +10,7 @@ A network scanner in Go. Successor to [Flan Scan](https://github.com/cloudflare/
 - 51-protocol service fingerprinting via [fingerprintx](https://github.com/praetorian-inc/fingerprintx) (SSH, HTTP, MySQL, Redis, RDP, PostgreSQL, and more)
 - Technology detection (Wappalyzer) and CPE generation
 - TLS certificate inspection (version, cipher, subject, issuer, SANs, expiry, self-signed)
+- Optional strict TLS certificate verification via `--tls-verify`
 - CVE lookup by CPE via NVD API
 - Host discovery (TCP probe to skip dead hosts)
 - Passive subdomain enumeration via 10 no-key sources (crt.sh, Common Crawl, Wayback Machine, RapidDNS, Anubis, Digitorus, HudsonRock, SiteDossier, THC, ThreatCrowd)
@@ -17,8 +18,9 @@ A network scanner in Go. Successor to [Flan Scan](https://github.com/cloudflare/
 - DNS enumeration with wildcard detection and custom wordlist/resolver support
 - NS, MX, TXT, CNAME record lookups
 - CIDR and stdin input support
-- nmap top 100/1000 port lists
+- nmap top 100/1000 port lists with expanded 2000/5000 presets
 - Scan checkpointing and resumption
+- Scan guardrails for large runs (`max_targets`, `max_ports_per_target`, `max_duration`)
 - Progress reporting
 - UDP service detection (DNS, NTP, SNMP, IPSEC) via `--udp`
 - Web crawler with app fingerprinting via `--crawl` (path, header, and cookie-based detection for 60+ CMSes, frameworks, and admin tools)
@@ -26,6 +28,7 @@ A network scanner in Go. Successor to [Flan Scan](https://github.com/cloudflare/
 - Graceful shutdown on SIGINT/SIGTERM
 - AI-powered security analysis via [Together API](https://together.ai) (DeepSeek V3.1) — brief summary on every scan, detailed report with `--analyze`
 - Pretty streaming CLI output with TTY detection (JSONL when piping)
+- Per-run scan metadata report (`scan-metadata-*.json`) for auditability
 - JSON, JSONL (streaming), CSV, and text output
 - Domain-mode output keeps subdomain and IP context (`hostname (ip):port`)
 - Security header checks are evaluated on `2xx/3xx` HTTP responses; `4xx/5xx` responses are reported as skipped
@@ -158,6 +161,21 @@ Context is automatically loaded from `config/context.yaml` when present. It defi
 
 Header inspection behavior: security-header findings are generated for HTTP `2xx/3xx` responses. For `4xx/5xx` responses (common on load balancer/CDN default pages), Flan reports header checks as skipped.
 
+DNS resolution behavior: Flan uses a deterministic resolver chain (custom resolver when provided, otherwise system resolver, then configured fallbacks) and records resolver/cache stats in scan metadata.
+
+Guardrails and DNS policy are configurable in `config/config.yaml`:
+
+```yaml
+scan:
+  max_targets: 5000
+  max_ports_per_target: 5000
+  max_duration: 30m
+dns:
+  resolver: ""
+  fallback_resolvers: ["1.1.1.1:53", "8.8.8.8:53"]
+  lookup_timeout: 3s
+```
+
 ## Flags
 
 | Flag | Description |
@@ -166,7 +184,7 @@ Header inspection behavior: security-header findings are generated for HTTP `2xx
 | `-l` | Target file (default `ips.txt`, `-` for stdin) |
 | `-d` | Domain to enumerate via DNS |
 | `-p` | Ports to scan |
-| `--top-ports` | Use nmap top port list: `100` or `1000` |
+| `--top-ports` | Use top port profile: `100`, `1000`, `2000`, or `5000` |
 | `--subdomain-ports` | Domain mode port profile: `web`, `standard`, or `full` |
 | `-c` | Config file (default `config/config.yaml`) |
 | `-w` | Custom DNS subdomain wordlist |
@@ -186,6 +204,7 @@ Header inspection behavior: security-header findings are generated for HTTP `2xx
 | `--crawl` | Crawl HTTP/HTTPS services for endpoints, sensitive paths, and app fingerprinting |
 | `--crawl-depth` | Max crawl depth (default: 2) |
 | `--tls-enum` | Enumerate supported TLS versions and cipher suites (~60 connections per TLS port, off by default) |
+| `--tls-verify` | Verify TLS certificates for TLS inspection, crawl, header probe, and TLS enumeration |
 | `--context` | Asset context YAML file (auto-loads `config/context.yaml` if present) |
 | `--analyze` | Detailed AI security analysis via Together API (requires `TOGETHER_API_KEY`) |
 | `--json` | JSON output |

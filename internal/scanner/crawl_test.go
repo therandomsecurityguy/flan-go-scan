@@ -118,7 +118,7 @@ func TestCrawlSensitivePaths(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	results, _ := Crawl(context.Background(), "http", "127.0.0.1", "", srv.Listener.Addr().(*net.TCPAddr).Port, 0, 5*time.Second, 0)
+	results, _ := Crawl(context.Background(), "http", "127.0.0.1", "", srv.Listener.Addr().(*net.TCPAddr).Port, 0, 5*time.Second, 0, false)
 
 	byPath := make(map[string]CrawlResult)
 	for _, r := range results {
@@ -149,7 +149,7 @@ func TestCrawlUsesProvidedHostHeader(t *testing.T) {
 	defer srv.Close()
 
 	port := srv.Listener.Addr().(*net.TCPAddr).Port
-	results, _ := Crawl(context.Background(), "http", "127.0.0.1", "testphp.vulnweb.com", port, 0, 5*time.Second, 0)
+	results, _ := Crawl(context.Background(), "http", "127.0.0.1", "testphp.vulnweb.com", port, 0, 5*time.Second, 0, false)
 	if len(results) == 0 {
 		t.Fatal("expected at least one crawl result")
 	}

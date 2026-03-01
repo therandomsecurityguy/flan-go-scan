@@ -25,7 +25,7 @@ func TestInspectHeadersSkipsNonSuccessResponses(t *testing.T) {
 		t.Fatalf("parse port: %v", err)
 	}
 
-	findings := InspectHeaders(context.Background(), "http", host, "", port, 2*time.Second)
+	findings := InspectHeaders(context.Background(), "http", host, "", port, 2*time.Second, false)
 	if len(findings) != 0 {
 		t.Fatalf("expected no findings for non-success response, got %d", len(findings))
 	}
@@ -46,7 +46,7 @@ func TestInspectHeadersReportsOnSuccessResponses(t *testing.T) {
 		t.Fatalf("parse port: %v", err)
 	}
 
-	findings := InspectHeaders(context.Background(), "http", host, "", port, 2*time.Second)
+	findings := InspectHeaders(context.Background(), "http", host, "", port, 2*time.Second, false)
 	if len(findings) == 0 {
 		t.Fatal("expected missing-header findings for success response")
 	}

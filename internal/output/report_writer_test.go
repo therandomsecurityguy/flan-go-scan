@@ -74,3 +74,45 @@ func TestJSONLWriter(t *testing.T) {
 		t.Fatalf("unexpected JSONL content: %s", string(data))
 	}
 }
+
+func TestWriteScanMetadata(t *testing.T) {
+	dir := t.TempDir()
+	path, err := WriteScanMetadata(dir, ScanMetadata{
+		StartedAt:       "2026-02-28T00:00:00Z",
+		CompletedAt:     "2026-02-28T00:00:01Z",
+		DurationMS:      1000,
+		Mode:            "target",
+		InputTargets:    1,
+		ResolvedTargets: 1,
+		AliveTargets:    1,
+		PortsPerTarget:  100,
+		PortsScheduled:  100,
+		PortsScanned:    100,
+		ServicesFound:   5,
+		RateLimit:       200,
+		Workers:         100,
+		Guardrails: GuardrailsMetadata{
+			MaxTargets:        5000,
+			MaxPortsPerTarget: 2000,
+			MaxDuration:       "30m0s",
+		},
+		DNS: DNSMetadata{
+			Lookups:     2,
+			CacheHits:   1,
+			CacheMisses: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("WriteScanMetadata failed: %v", err)
+	}
+	if path == "" {
+		t.Fatal("expected metadata file path")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read metadata file: %v", err)
+	}
+	if !strings.Contains(string(data), `"mode": "target"`) {
+		t.Fatalf("unexpected metadata content: %s", string(data))
+	}
+}

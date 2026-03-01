@@ -17,7 +17,7 @@ type HeaderFinding struct {
 	Detail   string `json:"detail"`
 }
 
-func InspectHeaders(ctx context.Context, scheme, ip, hostname string, port int, timeout time.Duration) []HeaderFinding {
+func InspectHeaders(ctx context.Context, scheme, ip, hostname string, port int, timeout time.Duration, verifyTLS bool) []HeaderFinding {
 	urlHost := ip
 	if strings.Contains(ip, ":") {
 		urlHost = "[" + ip + "]"
@@ -37,7 +37,7 @@ func InspectHeaders(ctx context.Context, scheme, ip, hostname string, port int, 
 		req.Host = hostname
 	}
 
-	tlsCfg := &tls.Config{InsecureSkipVerify: true} //nolint:gosec
+	tlsCfg := &tls.Config{InsecureSkipVerify: !verifyTLS}
 	if hostname != "" && net.ParseIP(hostname) == nil {
 		tlsCfg.ServerName = hostname
 	}
