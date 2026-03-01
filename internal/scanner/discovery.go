@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -30,18 +31,49 @@ func IsHostAlive(ctx context.Context, host string, ports []int, timeout time.Dur
 		}
 	}
 
+	const maxParallel = 6
+	sem := make(chan struct{}, maxParallel)
+	var wg sync.WaitGroup
+	found := make(chan struct{})
+	var mu sync.Mutex
+
 	for _, port := range candidatePorts {
-		if ctx.Err() != nil {
-			return false
-		}
-		addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-		dialer := net.Dialer{Timeout: timeout}
-		conn, err := dialer.DialContext(ctx, "tcp", addr)
-		if err == nil {
-			conn.Close()
-			return true
-		}
+		wg.Add(1)
+		go func(port int) {
+			sem <- struct{}{}
+			defer func() {
+				<-sem
+				wg.Done()
+			}()
+
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+			dialer := net.Dialer{Timeout: timeout}
+			conn, err := dialer.DialContext(ctx, "tcp", addr)
+			if err == nil {
+				conn.Close()
+				mu.Lock()
+				select {
+				case <-found:
+				default:
+					close(found)
+				}
+				mu.Unlock()
+			}
+		}(port)
 	}
 
-	return false
+	go wg.Wait()
+
+	select {
+	case <-found:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -34,32 +35,84 @@ func EnumerateTLS(ctx context.Context, host, hostname string, port int, timeout 
 	addr := tlsAddr(host, port)
 	result := &TLSEnum{}
 	hasTLS12 := false
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	versionCh := make(chan struct {
+		name    string
+		version uint16
+		weak    bool
+	})
 
 	for _, v := range tlsVersionList {
-		if ctx.Err() != nil {
-			break
+		wg.Add(1)
+		go func(version uint16, name string, weak bool) {
+			defer wg.Done()
+			if ctx.Err() != nil {
+				return
+			}
+			if probeTLSVersion(addr, hostname, version, timeout, verify) {
+				mu.Lock()
+				versionCh <- struct {
+					name    string
+					version uint16
+					weak    bool
+				}{name, version, weak}
+				mu.Unlock()
+			}
+		}(v.version, v.name, v.weak)
+	}
+
+	go func() {
+		wg.Wait()
+		close(versionCh)
+	}()
+
+	for v := range versionCh {
+		result.SupportedVersions = append(result.SupportedVersions, v.name)
+		if v.weak {
+			result.WeakVersions = append(result.WeakVersions, v.name)
 		}
-		if probeTLSVersion(addr, hostname, v.version, timeout, verify) {
-			result.SupportedVersions = append(result.SupportedVersions, v.name)
-			if v.weak {
-				result.WeakVersions = append(result.WeakVersions, v.name)
-			}
-			if v.version == tls.VersionTLS12 {
-				hasTLS12 = true
-			}
+		if v.version == tls.VersionTLS12 {
+			hasTLS12 = true
 		}
 	}
 
 	if hasTLS12 {
-		for _, cs := range append(tls.CipherSuites(), tls.InsecureCipherSuites()...) {
-			if ctx.Err() != nil {
-				break
-			}
-			if probeCipher(addr, hostname, cs.ID, timeout, verify) {
-				result.CipherSuites = append(result.CipherSuites, cs.Name)
-				if isWeakCipher(cs.Name) {
-					result.WeakCiphers = append(result.WeakCiphers, cs.Name)
+		cipherSuites := append(tls.CipherSuites(), tls.InsecureCipherSuites()...)
+		cipherCh := make(chan string, len(cipherSuites))
+		var cipherWG sync.WaitGroup
+		const maxParallel = 8
+		sem := make(chan struct{}, maxParallel)
+
+		for _, cs := range cipherSuites {
+			cipherWG.Add(1)
+			go func(cs *tls.CipherSuite) {
+				sem <- struct{}{}
+				defer func() {
+					<-sem
+					cipherWG.Done()
+				}()
+				if ctx.Err() != nil {
+					return
 				}
+				if probeCipher(addr, hostname, cs.ID, timeout, verify) {
+					mu.Lock()
+					cipherCh <- cs.Name
+					mu.Unlock()
+				}
+			}(cs)
+		}
+
+		go func() {
+			cipherWG.Wait()
+			close(cipherCh)
+		}()
+
+		for name := range cipherCh {
+			result.CipherSuites = append(result.CipherSuites, name)
+			if isWeakCipher(name) {
+				result.WeakCiphers = append(result.WeakCiphers, name)
 			}
 		}
 	}
