@@ -35,12 +35,18 @@ func IsHostAlive(ctx context.Context, host string, ports []int, timeout time.Dur
 	sem := make(chan struct{}, maxParallel)
 	var wg sync.WaitGroup
 	found := make(chan struct{})
-	var mu sync.Mutex
+	done := make(chan struct{})
+	var once sync.Once
 
 	for _, port := range candidatePorts {
 		wg.Add(1)
 		go func(port int) {
-			sem <- struct{}{}
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				wg.Done()
+				return
+			}
 			defer func() {
 				<-sem
 				wg.Done()
@@ -57,22 +63,21 @@ func IsHostAlive(ctx context.Context, host string, ports []int, timeout time.Dur
 			conn, err := dialer.DialContext(ctx, "tcp", addr)
 			if err == nil {
 				conn.Close()
-				mu.Lock()
-				select {
-				case <-found:
-				default:
-					close(found)
-				}
-				mu.Unlock()
+				once.Do(func() { close(found) })
 			}
 		}(port)
 	}
 
-	go wg.Wait()
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
 
 	select {
 	case <-found:
 		return true
+	case <-done:
+		return false
 	case <-ctx.Done():
 		return false
 	}

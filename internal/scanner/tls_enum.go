@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -35,30 +36,37 @@ func EnumerateTLS(ctx context.Context, host, hostname string, port int, timeout 
 	addr := tlsAddr(host, port)
 	result := &TLSEnum{}
 	hasTLS12 := false
-	var mu sync.Mutex
 	var wg sync.WaitGroup
 
 	versionCh := make(chan struct {
 		name    string
 		version uint16
 		weak    bool
-	})
+	}, len(tlsVersionList))
+	const maxVersionParallel = 2
+	versionSem := make(chan struct{}, maxVersionParallel)
 
 	for _, v := range tlsVersionList {
 		wg.Add(1)
 		go func(version uint16, name string, weak bool) {
 			defer wg.Done()
+			select {
+			case versionSem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() {
+				<-versionSem
+			}()
 			if ctx.Err() != nil {
 				return
 			}
 			if probeTLSVersion(addr, hostname, version, timeout, verify) {
-				mu.Lock()
 				versionCh <- struct {
 					name    string
 					version uint16
 					weak    bool
 				}{name, version, weak}
-				mu.Unlock()
 			}
 		}(v.version, v.name, v.weak)
 	}
@@ -82,13 +90,18 @@ func EnumerateTLS(ctx context.Context, host, hostname string, port int, timeout 
 		cipherSuites := append(tls.CipherSuites(), tls.InsecureCipherSuites()...)
 		cipherCh := make(chan string, len(cipherSuites))
 		var cipherWG sync.WaitGroup
-		const maxParallel = 8
+		const maxParallel = 4
 		sem := make(chan struct{}, maxParallel)
 
 		for _, cs := range cipherSuites {
 			cipherWG.Add(1)
 			go func(cs *tls.CipherSuite) {
-				sem <- struct{}{}
+				select {
+				case sem <- struct{}{}:
+				case <-ctx.Done():
+					cipherWG.Done()
+					return
+				}
 				defer func() {
 					<-sem
 					cipherWG.Done()
@@ -97,9 +110,7 @@ func EnumerateTLS(ctx context.Context, host, hostname string, port int, timeout 
 					return
 				}
 				if probeCipher(addr, hostname, cs.ID, timeout, verify) {
-					mu.Lock()
 					cipherCh <- cs.Name
-					mu.Unlock()
 				}
 			}(cs)
 		}
@@ -116,6 +127,11 @@ func EnumerateTLS(ctx context.Context, host, hostname string, port int, timeout 
 			}
 		}
 	}
+
+	sort.Strings(result.SupportedVersions)
+	sort.Strings(result.WeakVersions)
+	sort.Strings(result.CipherSuites)
+	sort.Strings(result.WeakCiphers)
 
 	if len(result.SupportedVersions) == 0 {
 		return nil
