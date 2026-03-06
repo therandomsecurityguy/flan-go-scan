@@ -2,7 +2,7 @@
 
 # flan
 
-A network scanner in Go. Successor to [Flan Scan](https://github.com/cloudflare/flan).
+A swiss-army scanner in Go. Successor to [Flan Scan](https://github.com/cloudflare/flan).
 
 ## Features
 
