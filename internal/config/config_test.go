@@ -43,6 +43,12 @@ func TestLoadConfigMissingFileUsesDefaults(t *testing.T) {
 	if len(cfg.DNS.FallbackResolvers) != 2 {
 		t.Fatalf("unexpected default fallback resolver count: %d", len(cfg.DNS.FallbackResolvers))
 	}
+	if cfg.Cloudflare.TokenEnv != "CLOUDFLARE_API_TOKEN" {
+		t.Fatalf("unexpected default cloudflare token env: %s", cfg.Cloudflare.TokenEnv)
+	}
+	if cfg.Cloudflare.Timeout != 15*time.Second {
+		t.Fatalf("unexpected default cloudflare timeout: %v", cfg.Cloudflare.Timeout)
+	}
 }
 
 func TestLoadConfigFromFileOverridesDefaults(t *testing.T) {
@@ -67,6 +73,16 @@ dns:
   fallback_resolvers:
     - "1.1.1.1:53"
   lookup_timeout: 4s
+cloudflare:
+  enabled: true
+  zones:
+    - together.ai
+  include:
+    - "*.together.ai"
+  exclude:
+    - "internal.together.ai"
+  token_env: CF_TOKEN
+  timeout: 11s
 `
 	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -117,5 +133,23 @@ dns:
 	}
 	if cfg.DNS.LookupTimeout != 4*time.Second {
 		t.Fatalf("expected dns lookup timeout override, got %v", cfg.DNS.LookupTimeout)
+	}
+	if !cfg.Cloudflare.Enabled {
+		t.Fatal("expected cloudflare enabled override to be true")
+	}
+	if len(cfg.Cloudflare.Zones) != 1 || cfg.Cloudflare.Zones[0] != "together.ai" {
+		t.Fatalf("unexpected cloudflare zones override: %v", cfg.Cloudflare.Zones)
+	}
+	if len(cfg.Cloudflare.Include) != 1 || cfg.Cloudflare.Include[0] != "*.together.ai" {
+		t.Fatalf("unexpected cloudflare include override: %v", cfg.Cloudflare.Include)
+	}
+	if len(cfg.Cloudflare.Exclude) != 1 || cfg.Cloudflare.Exclude[0] != "internal.together.ai" {
+		t.Fatalf("unexpected cloudflare exclude override: %v", cfg.Cloudflare.Exclude)
+	}
+	if cfg.Cloudflare.TokenEnv != "CF_TOKEN" {
+		t.Fatalf("unexpected cloudflare token env override: %s", cfg.Cloudflare.TokenEnv)
+	}
+	if cfg.Cloudflare.Timeout != 11*time.Second {
+		t.Fatalf("unexpected cloudflare timeout override: %v", cfg.Cloudflare.Timeout)
 	}
 }

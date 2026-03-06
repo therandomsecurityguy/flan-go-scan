@@ -16,6 +16,7 @@ A swiss-army scanner in Go. Successor to [Flan Scan](https://github.com/cloudfla
 - Passive subdomain enumeration via 10 no-key sources (crt.sh, Common Crawl, Wayback Machine, RapidDNS, Anubis, Digitorus, HudsonRock, SiteDossier, THC, ThreatCrowd)
 - CDN detection (Cloudflare) — limits scan to ports 80/443 by default on CDN hosts
 - DNS enumeration with wildcard detection and custom wordlist/resolver support
+- Cloudflare zone-based target discovery via `CLOUDFLARE_API_TOKEN`
 - NS, MX, TXT, CNAME record lookups
 - CIDR and stdin input support
 - nmap top 100/1000 port lists with expanded 2000/5000 presets
@@ -127,6 +128,24 @@ Scan all ports on CDN hosts (default is 80/443 only):
 flan -d example.com --scan-cdn
 ```
 
+Discover scan targets from Cloudflare zones:
+
+```
+flan --cloudflare --cloudflare-zones together.ai,together.xyz
+```
+
+Limit Cloudflare discovery to matching hostnames:
+
+```
+flan --cloudflare --cloudflare-zones together.ai --cloudflare-include "*.together.ai" --cloudflare-exclude "internal.together.ai"
+```
+
+Print Cloudflare-discovered hostnames only:
+
+```
+flan --cloudflare --cloudflare-zones together.ai --subdomains-only
+```
+
 Enable UDP scanning:
 
 ```
@@ -163,6 +182,8 @@ Header inspection behavior: security-header findings are generated for HTTP `2xx
 
 DNS resolution behavior: Flan uses a deterministic resolver chain (custom resolver when provided, otherwise system resolver, then configured fallbacks) and records resolver/cache stats in scan metadata.
 
+Cloudflare discovery behavior: Flan uses zones as the discovery boundary, keeps `A`, `AAAA`, and `CNAME` scan candidates, and skips validation, wildcard, and non-public-IP records by default.
+
 Guardrails and DNS policy are configurable in `config/config.yaml`:
 
 ```yaml
@@ -174,6 +195,13 @@ dns:
   resolver: ""
   fallback_resolvers: ["1.1.1.1:53", "8.8.8.8:53"]
   lookup_timeout: 3s
+cloudflare:
+  enabled: false
+  zones: []
+  include: []
+  exclude: []
+  token_env: CLOUDFLARE_API_TOKEN
+  timeout: 15s
 ```
 
 ## Flags
@@ -189,6 +217,10 @@ dns:
 | `-c` | Config file (default `config/config.yaml`) |
 | `-w` | Custom DNS subdomain wordlist |
 | `-r` | Custom DNS resolver (ip:port) |
+| `--cloudflare` | Discover scan targets from Cloudflare zone DNS records |
+| `--cloudflare-zones` | Comma-separated Cloudflare zone filter |
+| `--cloudflare-include` | Comma-separated hostname include filters |
+| `--cloudflare-exclude` | Comma-separated hostname exclude filters |
 | `--passive-only` | Skip brute-force, use passive sources only |
 | `--subdomains-only` | Print discovered subdomains and exit (no port scan) |
 | `--subfinder-sources` | Comma-separated passive sources override |

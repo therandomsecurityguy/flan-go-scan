@@ -20,6 +20,7 @@ import (
 	"github.com/therandomsecurityguy/flan-go-scan/internal/config"
 	"github.com/therandomsecurityguy/flan-go-scan/internal/dns"
 	"github.com/therandomsecurityguy/flan-go-scan/internal/output"
+	cfprovider "github.com/therandomsecurityguy/flan-go-scan/internal/providers/cloudflare"
 	"github.com/therandomsecurityguy/flan-go-scan/internal/scanner"
 	"golang.org/x/sync/singleflight"
 )
@@ -57,6 +58,10 @@ CONFIGURATION:
   -c, -config string       path to config file (default "config/config.yaml")
   -w, -wordlist string     custom DNS subdomain wordlist file
   -r, -resolver string     custom DNS resolver (ip:port)
+  --cloudflare             discover scan targets from Cloudflare zones
+  --cloudflare-zones string comma-separated Cloudflare zone filter
+  --cloudflare-include string comma-separated hostname include filters
+  --cloudflare-exclude string comma-separated hostname exclude filters
   --passive-only           skip brute-force, use passive sources only
   --subdomains-only        print discovered subdomains and exit (subfinder-style)
   --subfinder-sources string comma-separated passive sources override
@@ -86,6 +91,7 @@ EXAMPLES:
   flan -t scanme.nmap.org
   flan -l targets.txt --top-ports 1000
   flan -d together.ai
+  flan --cloudflare --cloudflare-zones together.ai,together.xyz
   flan -d together.ai --subdomains-only
   echo "10.0.0.0/24" | flan -l -
 
@@ -219,6 +225,10 @@ func main() {
 	wordlistShort := flag.String("w", "", "")
 	resolver := flag.String("resolver", "", "")
 	resolverShort := flag.String("r", "", "")
+	cloudflareFlag := flag.Bool("cloudflare", false, "")
+	cloudflareZones := flag.String("cloudflare-zones", "", "")
+	cloudflareInclude := flag.String("cloudflare-include", "", "")
+	cloudflareExclude := flag.String("cloudflare-exclude", "", "")
 	passiveOnly := flag.Bool("passive-only", false, "")
 	subdomainsOnly := flag.Bool("subdomains-only", false, "")
 	subfinderSources := flag.String("subfinder-sources", "", "")
@@ -288,8 +298,9 @@ func main() {
 	if *passiveOnly && dom == "" {
 		slog.Warn("--passive-only has no effect without -d")
 	}
-	if *subdomainsOnly && dom == "" {
-		slog.Error("--subdomains-only requires -d/--domain")
+	cloudflareEnabled := *cloudflareFlag || cfg.Cloudflare.Enabled
+	if *subdomainsOnly && dom == "" && !cloudflareEnabled {
+		slog.Error("--subdomains-only requires -d/--domain or --cloudflare")
 		os.Exit(1)
 	}
 	if *subdomainsOnly {
@@ -347,7 +358,56 @@ func main() {
 
 	if tgt != "" {
 		hosts = append(hosts, tgt)
-	} else if dom != "" {
+	}
+	if cloudflareEnabled {
+		tokenEnv := strings.TrimSpace(cfg.Cloudflare.TokenEnv)
+		if tokenEnv == "" {
+			tokenEnv = "CLOUDFLARE_API_TOKEN"
+		}
+		token := strings.TrimSpace(os.Getenv(tokenEnv))
+		if token == "" {
+			slog.Error("cloudflare token env var is not set", "env", tokenEnv)
+			os.Exit(1)
+		}
+
+		client, err := cfprovider.NewClient(token, cfg.Cloudflare.Timeout)
+		if err != nil {
+			slog.Error("failed to initialize cloudflare client", "err", err)
+			os.Exit(1)
+		}
+
+		discoverOpts := cfprovider.DiscoverOptions{
+			Zones:   cfg.Cloudflare.Zones,
+			Include: cfg.Cloudflare.Include,
+			Exclude: cfg.Cloudflare.Exclude,
+		}
+		if set["cloudflare-zones"] {
+			discoverOpts.Zones = splitCSV(*cloudflareZones)
+		}
+		if set["cloudflare-include"] {
+			discoverOpts.Include = splitCSV(*cloudflareInclude)
+		}
+		if set["cloudflare-exclude"] {
+			discoverOpts.Exclude = splitCSV(*cloudflareExclude)
+		}
+
+		slog.Info("discovering targets from Cloudflare", "zones", len(discoverOpts.Zones))
+		assets, err := client.Discover(ctx, discoverOpts)
+		if err != nil {
+			slog.Error("cloudflare discovery failed", "err", err)
+			os.Exit(1)
+		}
+		cfHosts := cfprovider.Hostnames(assets)
+		hosts = append(hosts, cfHosts...)
+		slog.Info("cloudflare discovery complete", "assets", len(assets), "hosts", len(cfHosts))
+		if *subdomainsOnly && dom == "" {
+			for _, host := range cfHosts {
+				fmt.Println(host)
+			}
+			return
+		}
+	}
+	if dom != "" {
 		slog.Info("enumerating subdomains", "domain", dom)
 
 		slog.Info("running passive enumeration")
@@ -453,7 +513,8 @@ func main() {
 		if err == nil && len(txtRecords) > 0 {
 			slog.Info("TXT records", "records", txtRecords)
 		}
-	} else {
+	}
+	if tgt == "" && dom == "" && !cloudflareEnabled {
 		hosts, err = readHosts(ipsFile)
 		if err != nil {
 			slog.Error("failed to read hosts", "err", err)
@@ -517,7 +578,7 @@ func main() {
 	}
 	aliveTargets := len(targets)
 	metaInput := scanMetadataInput{
-		mode:            scanMode(dom != ""),
+		mode:            scanMode(dom != "", cloudflareEnabled),
 		inputTargets:    inputTargets,
 		resolvedTargets: resolvedTargets,
 		aliveTargets:    aliveTargets,
@@ -1563,7 +1624,13 @@ func enforceScanGuardrails(targetCount, portCount int, cfg *config.Config) error
 	return nil
 }
 
-func scanMode(domainMode bool) string {
+func scanMode(domainMode bool, cloudflareMode bool) string {
+	if domainMode && cloudflareMode {
+		return "cloudflare+domain"
+	}
+	if cloudflareMode {
+		return "cloudflare"
+	}
 	if domainMode {
 		return "domain"
 	}

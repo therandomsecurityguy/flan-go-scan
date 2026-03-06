@@ -33,3 +33,10 @@ output:
   directory: ./reports
 checkpoint:
   file: scan-state.json
+cloudflare:
+  enabled: false
+  zones: []
+  include: []
+  exclude: []
+  token_env: CLOUDFLARE_API_TOKEN
+  timeout: 15s

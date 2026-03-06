@@ -46,6 +46,14 @@ type Config struct {
 	Checkpoint struct {
 		File string `mapstructure:"file"`
 	} `mapstructure:"checkpoint"`
+	Cloudflare struct {
+		Enabled  bool          `mapstructure:"enabled"`
+		Zones    []string      `mapstructure:"zones"`
+		Include  []string      `mapstructure:"include"`
+		Exclude  []string      `mapstructure:"exclude"`
+		TokenEnv string        `mapstructure:"token_env"`
+		Timeout  time.Duration `mapstructure:"timeout"`
+	} `mapstructure:"cloudflare"`
 }
 
 func defaults() *Config {
@@ -78,6 +86,12 @@ func defaults() *Config {
 	cfg.Output.Format = "jsonl"
 	cfg.Output.Directory = "-"
 	cfg.Checkpoint.File = "scan-state.json"
+	cfg.Cloudflare.Enabled = false
+	cfg.Cloudflare.Zones = nil
+	cfg.Cloudflare.Include = nil
+	cfg.Cloudflare.Exclude = nil
+	cfg.Cloudflare.TokenEnv = "CLOUDFLARE_API_TOKEN"
+	cfg.Cloudflare.Timeout = 15 * time.Second
 	return cfg
 }
 
