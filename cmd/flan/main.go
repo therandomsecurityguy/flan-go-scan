@@ -64,6 +64,7 @@ CONFIGURATION:
   --cloudflare-exclude string comma-separated hostname exclude filters
   --cloudflare-inventory-out string write normalized Cloudflare inventory snapshot to this path
   --cloudflare-diff-against string compare the current Cloudflare inventory against a previous snapshot
+  --cloudflare-delta-only scan only added/changed Cloudflare hosts when a previous snapshot is available
   --passive-only           skip brute-force, use passive sources only
   --subdomains-only        print discovered subdomains and exit (subfinder-style)
   --subfinder-sources string comma-separated passive sources override
@@ -233,6 +234,7 @@ func main() {
 	cloudflareExclude := flag.String("cloudflare-exclude", "", "")
 	cloudflareInventoryOut := flag.String("cloudflare-inventory-out", "", "")
 	cloudflareDiffAgainst := flag.String("cloudflare-diff-against", "", "")
+	cloudflareDeltaOnly := flag.Bool("cloudflare-delta-only", false, "")
 	passiveOnly := flag.Bool("passive-only", false, "")
 	subdomainsOnly := flag.Bool("subdomains-only", false, "")
 	subfinderSources := flag.String("subfinder-sources", "", "")
@@ -359,6 +361,7 @@ func main() {
 	}()
 
 	var hosts []string
+	noTargetsFromDelta := false
 
 	if tgt != "" {
 		hosts = append(hosts, tgt)
@@ -402,7 +405,7 @@ func main() {
 			os.Exit(1)
 		}
 		cfHosts := cfprovider.Hostnames(assets)
-		hosts = append(hosts, cfHosts...)
+		selectedCFHosts := cfHosts
 		inventoryOut := strings.TrimSpace(cfg.Cloudflare.InventoryOut)
 		if set["cloudflare-inventory-out"] {
 			inventoryOut = strings.TrimSpace(*cloudflareInventoryOut)
@@ -412,6 +415,7 @@ func main() {
 		if set["cloudflare-diff-against"] {
 			diffAgainst = strings.TrimSpace(*cloudflareDiffAgainst)
 		}
+		deltaOnly := cfg.Cloudflare.DeltaOnly || *cloudflareDeltaOnly
 		if diffAgainst == "" && inventoryOut != "" {
 			diffAgainst = inventoryOut
 		}
@@ -420,6 +424,11 @@ func main() {
 			if err == nil {
 				diff := cfprovider.DiffInventory(scanStarted, previous, snapshot)
 				slog.Info("cloudflare inventory diff", "added", diff.AddedCount, "removed", diff.RemovedCount, "changed", diff.ChangedCount)
+				if deltaOnly {
+					selectedCFHosts = cfprovider.HostnamesFromDiff(diff)
+					noTargetsFromDelta = len(selectedCFHosts) == 0
+					slog.Info("cloudflare delta scan selection", "hosts", len(selectedCFHosts))
+				}
 				if path, err := output.WriteCloudflareInventoryDiff(cfg.Output.Directory, inventoryOut, diff); err != nil {
 					slog.Warn("failed to write cloudflare inventory diff", "err", err)
 				} else if path != "" {
@@ -427,14 +436,19 @@ func main() {
 				}
 			} else if !os.IsNotExist(err) {
 				slog.Warn("failed to read previous cloudflare inventory", "path", diffAgainst, "err", err)
+			} else if deltaOnly {
+				slog.Info("cloudflare delta scan fallback to full inventory; previous snapshot not found", "path", diffAgainst)
 			}
+		} else if deltaOnly {
+			slog.Info("cloudflare delta scan fallback to full inventory; no previous snapshot configured")
 		}
 		if path, err := output.WriteCloudflareInventory(cfg.Output.Directory, inventoryOut, snapshot); err != nil {
 			slog.Warn("failed to write cloudflare inventory", "err", err)
 		} else if path != "" {
 			slog.Info("cloudflare inventory written", "path", path)
 		}
-		slog.Info("cloudflare discovery complete", "assets", len(assets), "hosts", len(cfHosts))
+		hosts = append(hosts, selectedCFHosts...)
+		slog.Info("cloudflare discovery complete", "assets", len(assets), "hosts", len(cfHosts), "scan_hosts", len(selectedCFHosts))
 		if *subdomainsOnly && dom == "" {
 			for _, host := range cfHosts {
 				fmt.Println(host)
@@ -558,6 +572,10 @@ func main() {
 	}
 
 	if len(hosts) == 0 {
+		if noTargetsFromDelta {
+			slog.Info("no Cloudflare delta hosts to scan")
+			return
+		}
 		slog.Error("no hosts to scan, provide -t, -d, or -l")
 		os.Exit(1)
 	}

@@ -220,6 +220,27 @@ func TestDiffInventory(t *testing.T) {
 	}
 }
 
+func TestHostnamesFromDiff(t *testing.T) {
+	diff := InventoryDiff{
+		Added: []Asset{
+			{Zone: "together.ai", Hostname: "new.together.ai", RecordType: "A", Value: "1.1.1.1", Source: "cloudflare"},
+			{Zone: "together.ai", Hostname: "new.together.ai", RecordType: "AAAA", Value: "2606:4700::1111", Source: "cloudflare"},
+		},
+		Changed: []AssetChange{
+			{
+				Before: Asset{Zone: "together.ai", Hostname: "app.together.ai", RecordType: "CNAME", Value: "old.example.net", Source: "cloudflare"},
+				After:  Asset{Zone: "together.ai", Hostname: "app.together.ai", RecordType: "CNAME", Value: "new.example.net", Source: "cloudflare"},
+			},
+		},
+	}
+
+	got := HostnamesFromDiff(diff)
+	want := []string{"app.together.ai", "new.together.ai"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("unexpected diff hostnames: got %v want %v", got, want)
+	}
+}
+
 func TestGetIncludesQuery(t *testing.T) {
 	client, err := NewClientForTesting("token", "https://example.test", newMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path != "/zones" {

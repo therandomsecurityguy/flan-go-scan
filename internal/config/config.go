@@ -55,6 +55,7 @@ type Config struct {
 		Timeout      time.Duration `mapstructure:"timeout"`
 		InventoryOut string        `mapstructure:"inventory_out"`
 		DiffAgainst  string        `mapstructure:"diff_against"`
+		DeltaOnly    bool          `mapstructure:"delta_only"`
 	} `mapstructure:"cloudflare"`
 }
 
@@ -96,6 +97,7 @@ func defaults() *Config {
 	cfg.Cloudflare.Timeout = 15 * time.Second
 	cfg.Cloudflare.InventoryOut = ""
 	cfg.Cloudflare.DiffAgainst = ""
+	cfg.Cloudflare.DeltaOnly = false
 	return cfg
 }
 

@@ -356,6 +356,15 @@ func DiffInventory(now time.Time, previous, current InventorySnapshot) Inventory
 	return diff
 }
 
+func HostnamesFromDiff(diff InventoryDiff) []string {
+	var assets []Asset
+	assets = append(assets, diff.Added...)
+	for _, change := range diff.Changed {
+		assets = append(assets, change.After)
+	}
+	return Hostnames(assets)
+}
+
 func (c *Client) get(ctx context.Context, endpoint string, query url.Values, dst any) error {
 	u, err := url.Parse(c.baseURL)
 	if err != nil {

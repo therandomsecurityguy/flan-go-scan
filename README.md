@@ -158,6 +158,12 @@ Diff the current Cloudflare inventory against a previous snapshot:
 flan --cloudflare --cloudflare-zones together.ai --cloudflare-inventory-out reports/cloudflare-together-ai.json --cloudflare-diff-against reports/cloudflare-together-ai-prev.json
 ```
 
+Scan only added/changed Cloudflare hosts when a previous snapshot exists:
+
+```
+flan --cloudflare --cloudflare-zones together.ai --cloudflare-inventory-out reports/cloudflare-together-ai.json --cloudflare-delta-only
+```
+
 Enable UDP scanning:
 
 ```
@@ -195,7 +201,7 @@ Header inspection behavior: security-header findings are generated for HTTP `2xx
 DNS resolution behavior: Flan uses a deterministic resolver chain (custom resolver when provided, otherwise system resolver, then configured fallbacks) and records resolver/cache stats in scan metadata.
 
 Cloudflare discovery behavior: Flan uses zones as the discovery boundary, keeps `A`, `AAAA`, and `CNAME` scan candidates, and skips validation, wildcard, and non-public-IP records by default.
-When Cloudflare discovery is enabled, Flan can also persist a normalized inventory snapshot and compare it against a prior snapshot for later diffing and scheduled scan workflows.
+When Cloudflare discovery is enabled, Flan can also persist a normalized inventory snapshot, compare it against a prior snapshot, and optionally narrow scans to added/changed hosts for scheduled delta workflows.
 
 Guardrails and DNS policy are configurable in `config/config.yaml`:
 
@@ -217,6 +223,7 @@ cloudflare:
   timeout: 15s
   inventory_out: ""
   diff_against: ""
+  delta_only: false
 ```
 
 ## Flags
@@ -238,6 +245,7 @@ cloudflare:
 | `--cloudflare-exclude` | Comma-separated hostname exclude filters |
 | `--cloudflare-inventory-out` | Write normalized Cloudflare inventory snapshot to this path |
 | `--cloudflare-diff-against` | Compare the current Cloudflare inventory against a previous snapshot |
+| `--cloudflare-delta-only` | Scan only added/changed Cloudflare hosts when a previous snapshot is available |
 | `--passive-only` | Skip brute-force, use passive sources only |
 | `--subdomains-only` | Print discovered subdomains and exit (no port scan) |
 | `--subfinder-sources` | Comma-separated passive sources override |

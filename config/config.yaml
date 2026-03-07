@@ -42,3 +42,4 @@ cloudflare:
   timeout: 15s
   inventory_out: ""
   diff_against: ""
+  delta_only: false

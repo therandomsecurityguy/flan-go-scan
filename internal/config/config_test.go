@@ -55,6 +55,9 @@ func TestLoadConfigMissingFileUsesDefaults(t *testing.T) {
 	if cfg.Cloudflare.DiffAgainst != "" {
 		t.Fatalf("unexpected default cloudflare diff_against: %q", cfg.Cloudflare.DiffAgainst)
 	}
+	if cfg.Cloudflare.DeltaOnly {
+		t.Fatal("unexpected default cloudflare delta_only to be true")
+	}
 }
 
 func TestLoadConfigFromFileOverridesDefaults(t *testing.T) {
@@ -91,6 +94,7 @@ cloudflare:
   timeout: 11s
   inventory_out: ./reports/cloudflare.json
   diff_against: ./reports/cloudflare-prev.json
+  delta_only: true
 `
 	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -165,5 +169,8 @@ cloudflare:
 	}
 	if cfg.Cloudflare.DiffAgainst != "./reports/cloudflare-prev.json" {
 		t.Fatalf("unexpected cloudflare diff_against override: %s", cfg.Cloudflare.DiffAgainst)
+	}
+	if !cfg.Cloudflare.DeltaOnly {
+		t.Fatal("expected cloudflare delta_only override to be true")
 	}
 }
