@@ -65,7 +65,7 @@ func (c *DNSCache) Lookup(host string) ([]net.IP, error) {
 	if exists && time.Now().Before(entry.expires) {
 		c.stats.CacheHits++
 		c.mu.Unlock()
-		return append([]net.IP(nil), entry.ips...), nil
+		return entry.ips, nil
 	}
 	if exists {
 		delete(c.entries, host)
@@ -114,7 +114,7 @@ func (c *DNSCache) Lookup(host string) ([]net.IP, error) {
 			expires: time.Now().Add(c.ttl),
 		}
 		c.mu.Unlock()
-		return append([]net.IP(nil), ips...), nil
+		return ips, nil
 	}
 
 	c.mu.Lock()

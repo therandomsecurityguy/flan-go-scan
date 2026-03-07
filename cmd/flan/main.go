@@ -547,6 +547,11 @@ func main() {
 		slog.Info("CDN hosts detected", "count", len(cdnHosts))
 	}
 
+	cdnSkipPorts := map[int]bool{
+		80:  true,
+		443: true,
+	}
+
 	progress := scanner.NewProgress(len(targets))
 	statsInterval := 5
 	if cfg.Scan.StatsInterval > 0 {
@@ -642,7 +647,7 @@ func main() {
 			if ctx.Err() != nil {
 				break
 			}
-			if cdn != "" && !*scanCDN && port != 80 && port != 443 {
+			if cdn != "" && !*scanCDN && !cdnSkipPorts[port] {
 				continue
 			}
 			if checkpoint.ShouldSkip(targetKey, port) {
@@ -664,6 +669,10 @@ func main() {
 		if len(hostPorts) > maxHostPorts {
 			maxHostPorts = len(hostPorts)
 		}
+	}
+
+	if storeResults {
+		results = make([]scanner.ScanResult, 0, portsScheduled/3)
 	}
 
 	for idx := 0; idx < maxHostPorts; idx++ {

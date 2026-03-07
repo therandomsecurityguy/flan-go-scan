@@ -32,7 +32,14 @@ type CVELookup struct {
 
 func NewCVELookup() *CVELookup {
 	return &CVELookup{
-		client:  &http.Client{Timeout: 15 * time.Second},
+		client: &http.Client{
+			Timeout: 15 * time.Second,
+			Transport: &http.Transport{
+				MaxIdleConns:        10,
+				MaxIdleConnsPerHost: 5,
+				IdleConnTimeout:     30 * time.Second,
+			},
+		},
 		cache:   make(map[string][]CVE),
 		limiter: rate.NewLimiter(rate.Every(6*time.Second), 1),
 	}
