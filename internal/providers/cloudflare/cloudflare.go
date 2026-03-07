@@ -57,6 +57,24 @@ type InventorySnapshot struct {
 	Assets      []Asset  `json:"assets"`
 }
 
+type InventoryDiff struct {
+	GeneratedAt         string        `json:"generated_at"`
+	Source              string        `json:"source"`
+	PreviousGeneratedAt string        `json:"previous_generated_at,omitempty"`
+	CurrentGeneratedAt  string        `json:"current_generated_at,omitempty"`
+	AddedCount          int           `json:"added_count"`
+	RemovedCount        int           `json:"removed_count"`
+	ChangedCount        int           `json:"changed_count"`
+	Added               []Asset       `json:"added,omitempty"`
+	Removed             []Asset       `json:"removed,omitempty"`
+	Changed             []AssetChange `json:"changed,omitempty"`
+}
+
+type AssetChange struct {
+	Before Asset `json:"before"`
+	After  Asset `json:"after"`
+}
+
 type DiscoverOptions struct {
 	Zones    []string
 	Include  []string
@@ -286,6 +304,58 @@ func BuildInventorySnapshot(now time.Time, assets []Asset, opts DiscoverOptions)
 	}
 }
 
+func DiffInventory(now time.Time, previous, current InventorySnapshot) InventoryDiff {
+	prevByIdentity := make(map[string]Asset, len(previous.Assets))
+	currByIdentity := make(map[string]Asset, len(current.Assets))
+
+	for _, asset := range previous.Assets {
+		prevByIdentity[assetIdentity(asset)] = asset
+	}
+	for _, asset := range current.Assets {
+		currByIdentity[assetIdentity(asset)] = asset
+	}
+
+	diff := InventoryDiff{
+		GeneratedAt:         now.UTC().Format(time.RFC3339),
+		Source:              "cloudflare",
+		PreviousGeneratedAt: previous.GeneratedAt,
+		CurrentGeneratedAt:  current.GeneratedAt,
+	}
+
+	for identity, currentAsset := range currByIdentity {
+		previousAsset, existed := prevByIdentity[identity]
+		if !existed {
+			diff.Added = append(diff.Added, currentAsset)
+			continue
+		}
+		if previousAsset.Proxied != currentAsset.Proxied || previousAsset.Source != currentAsset.Source {
+			diff.Changed = append(diff.Changed, AssetChange{Before: previousAsset, After: currentAsset})
+		}
+	}
+
+	for identity, previousAsset := range prevByIdentity {
+		if _, exists := currByIdentity[identity]; !exists {
+			diff.Removed = append(diff.Removed, previousAsset)
+		}
+	}
+
+	sort.Slice(diff.Added, func(i, j int) bool {
+		return assetKey(diff.Added[i]) < assetKey(diff.Added[j])
+	})
+	sort.Slice(diff.Removed, func(i, j int) bool {
+		return assetKey(diff.Removed[i]) < assetKey(diff.Removed[j])
+	})
+	sort.Slice(diff.Changed, func(i, j int) bool {
+		return assetIdentity(diff.Changed[i].After) < assetIdentity(diff.Changed[j].After)
+	})
+
+	diff.AddedCount = len(diff.Added)
+	diff.RemovedCount = len(diff.Removed)
+	diff.ChangedCount = len(diff.Changed)
+
+	return diff
+}
+
 func (c *Client) get(ctx context.Context, endpoint string, query url.Values, dst any) error {
 	u, err := url.Parse(c.baseURL)
 	if err != nil {
@@ -459,4 +529,12 @@ func uniqueSortedValues(values []string) []string {
 	}
 	sort.Strings(normalized)
 	return normalized
+}
+
+func assetIdentity(asset Asset) string {
+	return asset.Zone + "|" + asset.Hostname + "|" + asset.RecordType + "|" + asset.Value
+}
+
+func assetKey(asset Asset) string {
+	return assetIdentity(asset) + "|" + fmt.Sprintf("%t", asset.Proxied)
 }

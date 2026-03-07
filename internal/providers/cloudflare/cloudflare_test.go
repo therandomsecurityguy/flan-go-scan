@@ -186,6 +186,40 @@ func TestBuildInventorySnapshot(t *testing.T) {
 	}
 }
 
+func TestDiffInventory(t *testing.T) {
+	previous := InventorySnapshot{
+		GeneratedAt: "2026-03-06T10:00:00Z",
+		Assets: []Asset{
+			{Zone: "together.ai", Hostname: "api.together.ai", RecordType: "CNAME", Value: "old.example.net", Proxied: true, Source: "cloudflare"},
+			{Zone: "together.ai", Hostname: "legacy.together.ai", RecordType: "A", Value: "8.8.8.8", Proxied: false, Source: "cloudflare"},
+			{Zone: "together.ai", Hostname: "app.together.ai", RecordType: "CNAME", Value: "svc.example.net", Proxied: false, Source: "cloudflare"},
+		},
+	}
+	current := InventorySnapshot{
+		GeneratedAt: "2026-03-07T10:00:00Z",
+		Assets: []Asset{
+			{Zone: "together.ai", Hostname: "api.together.ai", RecordType: "CNAME", Value: "new.example.net", Proxied: true, Source: "cloudflare"},
+			{Zone: "together.ai", Hostname: "app.together.ai", RecordType: "CNAME", Value: "svc.example.net", Proxied: true, Source: "cloudflare"},
+			{Zone: "together.ai", Hostname: "new.together.ai", RecordType: "A", Value: "1.1.1.1", Proxied: false, Source: "cloudflare"},
+		},
+	}
+
+	diff := DiffInventory(time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC), previous, current)
+
+	if diff.AddedCount != 2 {
+		t.Fatalf("unexpected added count: %d", diff.AddedCount)
+	}
+	if diff.RemovedCount != 2 {
+		t.Fatalf("unexpected removed count: %d", diff.RemovedCount)
+	}
+	if diff.ChangedCount != 1 {
+		t.Fatalf("unexpected changed count: %d", diff.ChangedCount)
+	}
+	if len(diff.Changed) != 1 || diff.Changed[0].After.Hostname != "app.together.ai" {
+		t.Fatalf("unexpected changed assets: %#v", diff.Changed)
+	}
+}
+
 func TestGetIncludesQuery(t *testing.T) {
 	client, err := NewClientForTesting("token", "https://example.test", newMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path != "/zones" {

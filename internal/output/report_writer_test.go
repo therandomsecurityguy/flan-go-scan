@@ -165,3 +165,45 @@ func TestWriteCloudflareInventoryExplicitPath(t *testing.T) {
 		t.Fatalf("expected inventory file at explicit path: %v", err)
 	}
 }
+
+func TestReadCloudflareInventory(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cloudflare.json")
+	expected := cfprovider.InventorySnapshot{
+		GeneratedAt: "2026-03-07T00:00:00Z",
+		Source:      "cloudflare",
+		AssetCount:  1,
+		Assets: []cfprovider.Asset{
+			{Zone: "together.ai", Hostname: "api.together.ai", RecordType: "CNAME", Value: "svc.example.net", Proxied: true, Source: "cloudflare"},
+		},
+	}
+	if _, err := WriteCloudflareInventory("", path, expected); err != nil {
+		t.Fatalf("WriteCloudflareInventory failed: %v", err)
+	}
+	got, err := ReadCloudflareInventory(path)
+	if err != nil {
+		t.Fatalf("ReadCloudflareInventory failed: %v", err)
+	}
+	if got.AssetCount != expected.AssetCount || len(got.Assets) != len(expected.Assets) {
+		t.Fatalf("unexpected inventory readback: %#v", got)
+	}
+}
+
+func TestWriteCloudflareInventoryDiff(t *testing.T) {
+	dir := t.TempDir()
+	inventoryPath := filepath.Join(dir, "cloudflare.json")
+	path, err := WriteCloudflareInventoryDiff("", inventoryPath, cfprovider.InventoryDiff{
+		GeneratedAt: "2026-03-07T01:00:00Z",
+		Source:      "cloudflare",
+		AddedCount:  1,
+	})
+	if err != nil {
+		t.Fatalf("WriteCloudflareInventoryDiff failed: %v", err)
+	}
+	if path != filepath.Join(dir, "cloudflare-diff.json") {
+		t.Fatalf("unexpected diff path: %s", path)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected diff file: %v", err)
+	}
+}

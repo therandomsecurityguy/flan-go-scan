@@ -52,6 +52,9 @@ func TestLoadConfigMissingFileUsesDefaults(t *testing.T) {
 	if cfg.Cloudflare.InventoryOut != "" {
 		t.Fatalf("unexpected default cloudflare inventory out: %q", cfg.Cloudflare.InventoryOut)
 	}
+	if cfg.Cloudflare.DiffAgainst != "" {
+		t.Fatalf("unexpected default cloudflare diff_against: %q", cfg.Cloudflare.DiffAgainst)
+	}
 }
 
 func TestLoadConfigFromFileOverridesDefaults(t *testing.T) {
@@ -87,6 +90,7 @@ cloudflare:
   token_env: CF_TOKEN
   timeout: 11s
   inventory_out: ./reports/cloudflare.json
+  diff_against: ./reports/cloudflare-prev.json
 `
 	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -158,5 +162,8 @@ cloudflare:
 	}
 	if cfg.Cloudflare.InventoryOut != "./reports/cloudflare.json" {
 		t.Fatalf("unexpected cloudflare inventory_out override: %s", cfg.Cloudflare.InventoryOut)
+	}
+	if cfg.Cloudflare.DiffAgainst != "./reports/cloudflare-prev.json" {
+		t.Fatalf("unexpected cloudflare diff_against override: %s", cfg.Cloudflare.DiffAgainst)
 	}
 }

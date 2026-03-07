@@ -41,3 +41,4 @@ cloudflare:
   token_env: CLOUDFLARE_API_TOKEN
   timeout: 15s
   inventory_out: ""
+  diff_against: ""

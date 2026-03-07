@@ -63,6 +63,7 @@ CONFIGURATION:
   --cloudflare-include string comma-separated hostname include filters
   --cloudflare-exclude string comma-separated hostname exclude filters
   --cloudflare-inventory-out string write normalized Cloudflare inventory snapshot to this path
+  --cloudflare-diff-against string compare the current Cloudflare inventory against a previous snapshot
   --passive-only           skip brute-force, use passive sources only
   --subdomains-only        print discovered subdomains and exit (subfinder-style)
   --subfinder-sources string comma-separated passive sources override
@@ -231,6 +232,7 @@ func main() {
 	cloudflareInclude := flag.String("cloudflare-include", "", "")
 	cloudflareExclude := flag.String("cloudflare-exclude", "", "")
 	cloudflareInventoryOut := flag.String("cloudflare-inventory-out", "", "")
+	cloudflareDiffAgainst := flag.String("cloudflare-diff-against", "", "")
 	passiveOnly := flag.Bool("passive-only", false, "")
 	subdomainsOnly := flag.Bool("subdomains-only", false, "")
 	subfinderSources := flag.String("subfinder-sources", "", "")
@@ -406,6 +408,27 @@ func main() {
 			inventoryOut = strings.TrimSpace(*cloudflareInventoryOut)
 		}
 		snapshot := cfprovider.BuildInventorySnapshot(scanStarted, assets, discoverOpts)
+		diffAgainst := strings.TrimSpace(cfg.Cloudflare.DiffAgainst)
+		if set["cloudflare-diff-against"] {
+			diffAgainst = strings.TrimSpace(*cloudflareDiffAgainst)
+		}
+		if diffAgainst == "" && inventoryOut != "" {
+			diffAgainst = inventoryOut
+		}
+		if diffAgainst != "" {
+			previous, err := output.ReadCloudflareInventory(diffAgainst)
+			if err == nil {
+				diff := cfprovider.DiffInventory(scanStarted, previous, snapshot)
+				slog.Info("cloudflare inventory diff", "added", diff.AddedCount, "removed", diff.RemovedCount, "changed", diff.ChangedCount)
+				if path, err := output.WriteCloudflareInventoryDiff(cfg.Output.Directory, inventoryOut, diff); err != nil {
+					slog.Warn("failed to write cloudflare inventory diff", "err", err)
+				} else if path != "" {
+					slog.Info("cloudflare inventory diff written", "path", path)
+				}
+			} else if !os.IsNotExist(err) {
+				slog.Warn("failed to read previous cloudflare inventory", "path", diffAgainst, "err", err)
+			}
+		}
 		if path, err := output.WriteCloudflareInventory(cfg.Output.Directory, inventoryOut, snapshot); err != nil {
 			slog.Warn("failed to write cloudflare inventory", "err", err)
 		} else if path != "" {

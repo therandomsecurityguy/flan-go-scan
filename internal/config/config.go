@@ -54,6 +54,7 @@ type Config struct {
 		TokenEnv     string        `mapstructure:"token_env"`
 		Timeout      time.Duration `mapstructure:"timeout"`
 		InventoryOut string        `mapstructure:"inventory_out"`
+		DiffAgainst  string        `mapstructure:"diff_against"`
 	} `mapstructure:"cloudflare"`
 }
 
@@ -94,6 +95,7 @@ func defaults() *Config {
 	cfg.Cloudflare.TokenEnv = "CLOUDFLARE_API_TOKEN"
 	cfg.Cloudflare.Timeout = 15 * time.Second
 	cfg.Cloudflare.InventoryOut = ""
+	cfg.Cloudflare.DiffAgainst = ""
 	return cfg
 }
 
