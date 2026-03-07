@@ -46,6 +46,17 @@ type Asset struct {
 	Source     string `json:"source"`
 }
 
+type InventorySnapshot struct {
+	GeneratedAt string   `json:"generated_at"`
+	Source      string   `json:"source"`
+	Zones       []string `json:"zones,omitempty"`
+	ZoneFilters []string `json:"zone_filters,omitempty"`
+	Include     []string `json:"include,omitempty"`
+	Exclude     []string `json:"exclude,omitempty"`
+	AssetCount  int      `json:"asset_count"`
+	Assets      []Asset  `json:"assets"`
+}
+
 type DiscoverOptions struct {
 	Zones    []string
 	Include  []string
@@ -252,6 +263,29 @@ func Hostnames(assets []Asset) []string {
 	return hostnames
 }
 
+func BuildInventorySnapshot(now time.Time, assets []Asset, opts DiscoverOptions) InventorySnapshot {
+	zones := uniqueSortedValues(func() []string {
+		values := make([]string, 0, len(assets))
+		for _, asset := range assets {
+			if zone := normalizeHost(asset.Zone); zone != "" {
+				values = append(values, zone)
+			}
+		}
+		return values
+	}())
+
+	return InventorySnapshot{
+		GeneratedAt: now.UTC().Format(time.RFC3339),
+		Source:      "cloudflare",
+		Zones:       zones,
+		ZoneFilters: uniqueSortedValues(opts.Zones),
+		Include:     uniqueSortedValues(opts.Include),
+		Exclude:     uniqueSortedValues(opts.Exclude),
+		AssetCount:  len(assets),
+		Assets:      append([]Asset(nil), assets...),
+	}
+}
+
 func (c *Client) get(ctx context.Context, endpoint string, query url.Values, dst any) error {
 	u, err := url.Parse(c.baseURL)
 	if err != nil {
@@ -407,4 +441,22 @@ func isPublicIP(value string) bool {
 		}
 	}
 	return true
+}
+
+func uniqueSortedValues(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		value = normalizeHost(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		normalized = append(normalized, value)
+	}
+	sort.Strings(normalized)
+	return normalized
 }

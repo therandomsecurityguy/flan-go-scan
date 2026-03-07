@@ -1,11 +1,13 @@
 package output
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	cfprovider "github.com/therandomsecurityguy/flan-go-scan/internal/providers/cloudflare"
 	"github.com/therandomsecurityguy/flan-go-scan/internal/scanner"
 )
 
@@ -114,5 +116,52 @@ func TestWriteScanMetadata(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"mode": "target"`) {
 		t.Fatalf("unexpected metadata content: %s", string(data))
+	}
+}
+
+func TestWriteCloudflareInventoryUsesOutputDir(t *testing.T) {
+	dir := t.TempDir()
+	path, err := WriteCloudflareInventory(dir, "", cfprovider.InventorySnapshot{
+		GeneratedAt: "2026-03-07T00:00:00Z",
+		Source:      "cloudflare",
+		AssetCount:  1,
+		Assets: []cfprovider.Asset{
+			{Zone: "together.ai", Hostname: "api.together.ai", RecordType: "CNAME", Value: "svc.example.net", Proxied: true, Source: "cloudflare"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("WriteCloudflareInventory failed: %v", err)
+	}
+	if path == "" {
+		t.Fatal("expected inventory file path")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read inventory file: %v", err)
+	}
+	var snapshot cfprovider.InventorySnapshot
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		t.Fatalf("unmarshal inventory: %v", err)
+	}
+	if snapshot.AssetCount != 1 || len(snapshot.Assets) != 1 {
+		t.Fatalf("unexpected inventory content: %#v", snapshot)
+	}
+}
+
+func TestWriteCloudflareInventoryExplicitPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "inventory", "cloudflare.json")
+	writtenPath, err := WriteCloudflareInventory("", path, cfprovider.InventorySnapshot{
+		GeneratedAt: "2026-03-07T00:00:00Z",
+		Source:      "cloudflare",
+	})
+	if err != nil {
+		t.Fatalf("WriteCloudflareInventory failed: %v", err)
+	}
+	if writtenPath != path {
+		t.Fatalf("unexpected written path: got %s want %s", writtenPath, path)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected inventory file at explicit path: %v", err)
 	}
 }

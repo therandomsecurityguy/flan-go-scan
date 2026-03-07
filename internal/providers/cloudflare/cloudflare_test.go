@@ -162,6 +162,30 @@ func TestNewClientRejectsEmptyToken(t *testing.T) {
 	}
 }
 
+func TestBuildInventorySnapshot(t *testing.T) {
+	snapshot := BuildInventorySnapshot(time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC), []Asset{
+		{Zone: "together.ai", Hostname: "api.together.ai", RecordType: "CNAME", Value: "svc.example.net", Proxied: true, Source: "cloudflare"},
+		{Zone: "together.ai", Hostname: "www.together.ai", RecordType: "A", Value: "8.8.8.8", Proxied: false, Source: "cloudflare"},
+	}, DiscoverOptions{
+		Zones:   []string{"together.ai", "together.ai"},
+		Include: []string{"*.together.ai"},
+		Exclude: []string{"internal.together.ai"},
+	})
+
+	if snapshot.GeneratedAt != "2026-03-07T12:00:00Z" {
+		t.Fatalf("unexpected generated_at: %s", snapshot.GeneratedAt)
+	}
+	if snapshot.AssetCount != 2 {
+		t.Fatalf("unexpected asset_count: %d", snapshot.AssetCount)
+	}
+	if len(snapshot.Zones) != 1 || snapshot.Zones[0] != "together.ai" {
+		t.Fatalf("unexpected zones: %v", snapshot.Zones)
+	}
+	if len(snapshot.ZoneFilters) != 1 || snapshot.ZoneFilters[0] != "together.ai" {
+		t.Fatalf("unexpected zone filters: %v", snapshot.ZoneFilters)
+	}
+}
+
 func TestGetIncludesQuery(t *testing.T) {
 	client, err := NewClientForTesting("token", "https://example.test", newMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path != "/zones" {

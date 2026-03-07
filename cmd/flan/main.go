@@ -62,6 +62,7 @@ CONFIGURATION:
   --cloudflare-zones string comma-separated Cloudflare zone filter
   --cloudflare-include string comma-separated hostname include filters
   --cloudflare-exclude string comma-separated hostname exclude filters
+  --cloudflare-inventory-out string write normalized Cloudflare inventory snapshot to this path
   --passive-only           skip brute-force, use passive sources only
   --subdomains-only        print discovered subdomains and exit (subfinder-style)
   --subfinder-sources string comma-separated passive sources override
@@ -229,6 +230,7 @@ func main() {
 	cloudflareZones := flag.String("cloudflare-zones", "", "")
 	cloudflareInclude := flag.String("cloudflare-include", "", "")
 	cloudflareExclude := flag.String("cloudflare-exclude", "", "")
+	cloudflareInventoryOut := flag.String("cloudflare-inventory-out", "", "")
 	passiveOnly := flag.Bool("passive-only", false, "")
 	subdomainsOnly := flag.Bool("subdomains-only", false, "")
 	subfinderSources := flag.String("subfinder-sources", "", "")
@@ -399,6 +401,16 @@ func main() {
 		}
 		cfHosts := cfprovider.Hostnames(assets)
 		hosts = append(hosts, cfHosts...)
+		inventoryOut := strings.TrimSpace(cfg.Cloudflare.InventoryOut)
+		if set["cloudflare-inventory-out"] {
+			inventoryOut = strings.TrimSpace(*cloudflareInventoryOut)
+		}
+		snapshot := cfprovider.BuildInventorySnapshot(scanStarted, assets, discoverOpts)
+		if path, err := output.WriteCloudflareInventory(cfg.Output.Directory, inventoryOut, snapshot); err != nil {
+			slog.Warn("failed to write cloudflare inventory", "err", err)
+		} else if path != "" {
+			slog.Info("cloudflare inventory written", "path", path)
+		}
 		slog.Info("cloudflare discovery complete", "assets", len(assets), "hosts", len(cfHosts))
 		if *subdomainsOnly && dom == "" {
 			for _, host := range cfHosts {
