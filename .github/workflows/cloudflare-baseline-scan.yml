@@ -40,10 +40,10 @@ jobs:
       WORKFLOW_CLOUDFLARE_INCLUDE: ${{ inputs.cloudflare_include || '' }}
       WORKFLOW_CLOUDFLARE_EXCLUDE: ${{ inputs.cloudflare_exclude || '' }}
       WORKFLOW_TOP_PORTS: ${{ inputs.top_ports || '' }}
-      REPO_CLOUDFLARE_ZONES: ${{ vars.CLOUDFLARE_ZONES || '' }}
-      REPO_CLOUDFLARE_INCLUDE: ${{ vars.CLOUDFLARE_INCLUDE || '' }}
-      REPO_CLOUDFLARE_EXCLUDE: ${{ vars.CLOUDFLARE_EXCLUDE || '' }}
-      REPO_TOP_PORTS: ${{ vars.CLOUDFLARE_TOP_PORTS || '' }}
+      SECRET_CLOUDFLARE_ZONES: ${{ secrets.CLOUDFLARE_ZONES || '' }}
+      SECRET_CLOUDFLARE_INCLUDE: ${{ secrets.CLOUDFLARE_INCLUDE || '' }}
+      SECRET_CLOUDFLARE_EXCLUDE: ${{ secrets.CLOUDFLARE_EXCLUDE || '' }}
+      SECRET_TOP_PORTS: ${{ secrets.CLOUDFLARE_TOP_PORTS || '' }}
 
     steps:
       - name: Checkout
@@ -65,10 +65,10 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
-          zones="${WORKFLOW_CLOUDFLARE_ZONES:-${REPO_CLOUDFLARE_ZONES}}"
-          include="${WORKFLOW_CLOUDFLARE_INCLUDE:-${REPO_CLOUDFLARE_INCLUDE}}"
-          exclude="${WORKFLOW_CLOUDFLARE_EXCLUDE:-${REPO_CLOUDFLARE_EXCLUDE}}"
-          top_ports="${WORKFLOW_TOP_PORTS:-${REPO_TOP_PORTS}}"
+          zones="${WORKFLOW_CLOUDFLARE_ZONES:-${SECRET_CLOUDFLARE_ZONES}}"
+          include="${WORKFLOW_CLOUDFLARE_INCLUDE:-${SECRET_CLOUDFLARE_INCLUDE}}"
+          exclude="${WORKFLOW_CLOUDFLARE_EXCLUDE:-${SECRET_CLOUDFLARE_EXCLUDE}}"
+          top_ports="${WORKFLOW_TOP_PORTS:-${SECRET_TOP_PORTS}}"
 
           args=(
             --cloudflare

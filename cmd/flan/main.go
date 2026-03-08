@@ -93,9 +93,9 @@ OUTPUT:
 EXAMPLES:
   flan -t scanme.nmap.org
   flan -l targets.txt --top-ports 1000
-  flan -d together.ai
-  flan --cloudflare --cloudflare-zones together.ai,together.xyz
-  flan -d together.ai --subdomains-only
+  flan -d example.net
+  flan --cloudflare --cloudflare-zones example.net --cloudflare-include api.example.net
+  flan -d example.net --subdomains-only
   echo "10.0.0.0/24" | flan -l -
 
 `)
@@ -450,7 +450,7 @@ func main() {
 		hosts = append(hosts, selectedCFHosts...)
 		slog.Info("cloudflare discovery complete", "assets", len(assets), "hosts", len(cfHosts), "scan_hosts", len(selectedCFHosts))
 		if *subdomainsOnly && dom == "" {
-			for _, host := range cfHosts {
+			for _, host := range cloudflareOutputHosts(cfHosts, selectedCFHosts, deltaOnly) {
 				fmt.Println(host)
 			}
 			return
@@ -1648,6 +1648,13 @@ func displaySecurityHeaderFindings(res scanner.ScanResult) []scanner.HeaderFindi
 		findings = append(findings, finding)
 	}
 	return findings
+}
+
+func cloudflareOutputHosts(allHosts, selectedHosts []string, deltaOnly bool) []string {
+	if deltaOnly {
+		return selectedHosts
+	}
+	return allHosts
 }
 
 func suppressPrettyHeaderFinding(res scanner.ScanResult, finding scanner.HeaderFinding) bool {

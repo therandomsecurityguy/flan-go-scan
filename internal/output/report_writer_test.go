@@ -126,7 +126,7 @@ func TestWriteCloudflareInventoryUsesOutputDir(t *testing.T) {
 		Source:      "cloudflare",
 		AssetCount:  1,
 		Assets: []cfprovider.Asset{
-			{Zone: "together.ai", Hostname: "api.together.ai", RecordType: "CNAME", Value: "svc.example.net", Proxied: true, Source: "cloudflare"},
+			{Zone: "example.net", Hostname: "api.example.net", RecordType: "CNAME", Value: "svc.example.net", Proxied: true, Source: "cloudflare"},
 		},
 	})
 	if err != nil {
@@ -174,7 +174,7 @@ func TestReadCloudflareInventory(t *testing.T) {
 		Source:      "cloudflare",
 		AssetCount:  1,
 		Assets: []cfprovider.Asset{
-			{Zone: "together.ai", Hostname: "api.together.ai", RecordType: "CNAME", Value: "svc.example.net", Proxied: true, Source: "cloudflare"},
+			{Zone: "example.net", Hostname: "api.example.net", RecordType: "CNAME", Value: "svc.example.net", Proxied: true, Source: "cloudflare"},
 		},
 	}
 	if _, err := WriteCloudflareInventory("", path, expected); err != nil {

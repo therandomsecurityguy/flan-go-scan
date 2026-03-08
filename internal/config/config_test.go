@@ -85,11 +85,11 @@ dns:
 cloudflare:
   enabled: true
   zones:
-    - together.ai
+    - example.net
   include:
-    - "*.together.ai"
+    - "*.example.net"
   exclude:
-    - "internal.together.ai"
+    - "internal.example.net"
   token_env: CF_TOKEN
   timeout: 11s
   inventory_out: ./reports/cloudflare.json
@@ -149,13 +149,13 @@ cloudflare:
 	if !cfg.Cloudflare.Enabled {
 		t.Fatal("expected cloudflare enabled override to be true")
 	}
-	if len(cfg.Cloudflare.Zones) != 1 || cfg.Cloudflare.Zones[0] != "together.ai" {
+	if len(cfg.Cloudflare.Zones) != 1 || cfg.Cloudflare.Zones[0] != "example.net" {
 		t.Fatalf("unexpected cloudflare zones override: %v", cfg.Cloudflare.Zones)
 	}
-	if len(cfg.Cloudflare.Include) != 1 || cfg.Cloudflare.Include[0] != "*.together.ai" {
+	if len(cfg.Cloudflare.Include) != 1 || cfg.Cloudflare.Include[0] != "*.example.net" {
 		t.Fatalf("unexpected cloudflare include override: %v", cfg.Cloudflare.Include)
 	}
-	if len(cfg.Cloudflare.Exclude) != 1 || cfg.Cloudflare.Exclude[0] != "internal.together.ai" {
+	if len(cfg.Cloudflare.Exclude) != 1 || cfg.Cloudflare.Exclude[0] != "internal.example.net" {
 		t.Fatalf("unexpected cloudflare exclude override: %v", cfg.Cloudflare.Exclude)
 	}
 	if cfg.Cloudflare.TokenEnv != "CF_TOKEN" {

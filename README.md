@@ -131,37 +131,37 @@ flan -d example.com --scan-cdn
 Discover scan targets from Cloudflare zones:
 
 ```
-flan --cloudflare --cloudflare-zones together.ai,together.xyz
+flan --cloudflare --cloudflare-zones example.net --cloudflare-include api.example.net
 ```
 
 Limit Cloudflare discovery to matching hostnames:
 
 ```
-flan --cloudflare --cloudflare-zones together.ai --cloudflare-include "*.together.ai" --cloudflare-exclude "internal.together.ai"
+flan --cloudflare --cloudflare-zones example.net --cloudflare-include "api.example.net" --cloudflare-exclude "internal.example.net"
 ```
 
 Print Cloudflare-discovered hostnames only:
 
 ```
-flan --cloudflare --cloudflare-zones together.ai --subdomains-only
+flan --cloudflare --cloudflare-zones example.net --cloudflare-include "api.example.net" --subdomains-only
 ```
 
 Write a normalized Cloudflare inventory snapshot for later diffing:
 
 ```
-flan --cloudflare --cloudflare-zones together.ai --cloudflare-inventory-out reports/cloudflare-together-ai.json
+flan --cloudflare --cloudflare-zones example.net --cloudflare-include "api.example.net" --cloudflare-inventory-out reports/cloudflare-example-net.json
 ```
 
 Diff the current Cloudflare inventory against a previous snapshot:
 
 ```
-flan --cloudflare --cloudflare-zones together.ai --cloudflare-inventory-out reports/cloudflare-together-ai.json --cloudflare-diff-against reports/cloudflare-together-ai-prev.json
+flan --cloudflare --cloudflare-zones example.net --cloudflare-include "api.example.net" --cloudflare-inventory-out reports/cloudflare-example-net.json --cloudflare-diff-against reports/cloudflare-example-net-prev.json
 ```
 
 Scan only added/changed Cloudflare hosts when a previous snapshot exists:
 
 ```
-flan --cloudflare --cloudflare-zones together.ai --cloudflare-inventory-out reports/cloudflare-together-ai.json --cloudflare-delta-only
+flan --cloudflare --cloudflare-zones example.net --cloudflare-include "api.example.net" --cloudflare-inventory-out reports/cloudflare-example-net.json --cloudflare-delta-only
 ```
 
 Enable UDP scanning:
@@ -203,7 +203,7 @@ DNS resolution behavior: Flan uses a deterministic resolver chain (custom resolv
 Cloudflare discovery behavior: Flan uses zones as the discovery boundary, keeps `A`, `AAAA`, and `CNAME` scan candidates, and skips validation, wildcard, and non-public-IP records by default.
 When Cloudflare discovery is enabled, Flan can also persist a normalized inventory snapshot, compare it against a prior snapshot, and optionally narrow scans to added/changed hosts for scheduled delta workflows.
 
-For GitHub Actions automation, set the repository secret `CLOUDFLARE_API_TOKEN`. Optional repository variables for the Cloudflare workflows are `CLOUDFLARE_ZONES`, `CLOUDFLARE_INCLUDE`, `CLOUDFLARE_EXCLUDE`, and `CLOUDFLARE_TOP_PORTS`. Manual workflow runs can override those values with workflow inputs.
+For GitHub Actions automation, set the repository secret `CLOUDFLARE_API_TOKEN`. If you do not want Cloudflare scope in plaintext repo settings, either pass zones/include/exclude as manual workflow inputs or store them in secrets named `CLOUDFLARE_ZONES`, `CLOUDFLARE_INCLUDE`, `CLOUDFLARE_EXCLUDE`, and `CLOUDFLARE_TOP_PORTS`.
 
 Guardrails and DNS policy are configurable in `config/config.yaml`:
 

@@ -305,14 +305,14 @@ func BuildInventorySnapshot(now time.Time, assets []Asset, opts DiscoverOptions)
 }
 
 func DiffInventory(now time.Time, previous, current InventorySnapshot) InventoryDiff {
-	prevByIdentity := make(map[string]Asset, len(previous.Assets))
-	currByIdentity := make(map[string]Asset, len(current.Assets))
+	prevByKey := make(map[string]Asset, len(previous.Assets))
+	currByKey := make(map[string]Asset, len(current.Assets))
 
 	for _, asset := range previous.Assets {
-		prevByIdentity[assetIdentity(asset)] = asset
+		prevByKey[assetChangeKey(asset)] = asset
 	}
 	for _, asset := range current.Assets {
-		currByIdentity[assetIdentity(asset)] = asset
+		currByKey[assetChangeKey(asset)] = asset
 	}
 
 	diff := InventoryDiff{
@@ -322,19 +322,21 @@ func DiffInventory(now time.Time, previous, current InventorySnapshot) Inventory
 		CurrentGeneratedAt:  current.GeneratedAt,
 	}
 
-	for identity, currentAsset := range currByIdentity {
-		previousAsset, existed := prevByIdentity[identity]
+	for key, currentAsset := range currByKey {
+		previousAsset, existed := prevByKey[key]
 		if !existed {
 			diff.Added = append(diff.Added, currentAsset)
 			continue
 		}
-		if previousAsset.Proxied != currentAsset.Proxied || previousAsset.Source != currentAsset.Source {
+		if assetIdentity(previousAsset) != assetIdentity(currentAsset) ||
+			previousAsset.Proxied != currentAsset.Proxied ||
+			previousAsset.Source != currentAsset.Source {
 			diff.Changed = append(diff.Changed, AssetChange{Before: previousAsset, After: currentAsset})
 		}
 	}
 
-	for identity, previousAsset := range prevByIdentity {
-		if _, exists := currByIdentity[identity]; !exists {
+	for key, previousAsset := range prevByKey {
+		if _, exists := currByKey[key]; !exists {
 			diff.Removed = append(diff.Removed, previousAsset)
 		}
 	}
@@ -346,7 +348,7 @@ func DiffInventory(now time.Time, previous, current InventorySnapshot) Inventory
 		return assetKey(diff.Removed[i]) < assetKey(diff.Removed[j])
 	})
 	sort.Slice(diff.Changed, func(i, j int) bool {
-		return assetIdentity(diff.Changed[i].After) < assetIdentity(diff.Changed[j].After)
+		return assetChangeKey(diff.Changed[i].After) < assetChangeKey(diff.Changed[j].After)
 	})
 
 	diff.AddedCount = len(diff.Added)
@@ -542,6 +544,10 @@ func uniqueSortedValues(values []string) []string {
 
 func assetIdentity(asset Asset) string {
 	return asset.Zone + "|" + asset.Hostname + "|" + asset.RecordType + "|" + asset.Value
+}
+
+func assetChangeKey(asset Asset) string {
+	return asset.Zone + "|" + asset.Hostname + "|" + asset.RecordType
 }
 
 func assetKey(asset Asset) string {

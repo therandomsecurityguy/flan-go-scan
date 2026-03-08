@@ -206,7 +206,7 @@ func TestIsTransientAPIValidationError(t *testing.T) {
 
 func TestDisplaySecurityHeaderFindingsSuppressesInternalProbeNoise(t *testing.T) {
 	res := scanner.ScanResult{
-		Hostname: "metricstore.internal.together.ai",
+		Hostname: "internal-api.example.net",
 		Service:  "http",
 		Version:  "awselb/2.0",
 		SecurityHeaders: []scanner.HeaderFinding{
@@ -226,7 +226,7 @@ func TestDisplaySecurityHeaderFindingsSuppressesInternalProbeNoise(t *testing.T)
 
 func TestDisplaySecurityHeaderFindingsKeepsPublicProbeNoise(t *testing.T) {
 	res := scanner.ScanResult{
-		Hostname: "api-aws.together.ai",
+		Hostname: "api.example.net",
 		Service:  "http",
 		SecurityHeaders: []scanner.HeaderFinding{
 			{Header: "HTTP Probe", Severity: "LOW", Detail: "header inspection failed: Get \"http://1.2.3.4:80/\": context deadline exceeded"},
@@ -236,5 +236,20 @@ func TestDisplaySecurityHeaderFindingsKeepsPublicProbeNoise(t *testing.T) {
 	findings := displaySecurityHeaderFindings(res)
 	if len(findings) != 1 {
 		t.Fatalf("expected public probe failure to remain visible, got %#v", findings)
+	}
+}
+
+func TestCloudflareOutputHostsUsesDeltaSelection(t *testing.T) {
+	allHosts := []string{"api.example.net", "admin.example.net"}
+	selectedHosts := []string{"api.example.net"}
+
+	got := cloudflareOutputHosts(allHosts, selectedHosts, true)
+	if !reflect.DeepEqual(got, selectedHosts) {
+		t.Fatalf("unexpected delta hosts: got %v want %v", got, selectedHosts)
+	}
+
+	got = cloudflareOutputHosts(allHosts, selectedHosts, false)
+	if !reflect.DeepEqual(got, allHosts) {
+		t.Fatalf("unexpected full hosts: got %v want %v", got, allHosts)
 	}
 }

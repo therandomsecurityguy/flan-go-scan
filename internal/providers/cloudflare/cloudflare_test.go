@@ -22,8 +22,8 @@ func TestDiscoverFiltersAndNormalizesAssets(t *testing.T) {
 			return jsonResponse(t, map[string]any{
 				"success": true,
 				"result": []map[string]any{
-					{"id": "zone-1", "name": "together.ai", "status": "active", "paused": false, "type": "full"},
-					{"id": "zone-2", "name": "openchatkit.ai", "status": "active", "paused": false, "type": "full"},
+					{"id": "zone-1", "name": "example.net", "status": "active", "paused": false, "type": "full"},
+					{"id": "zone-2", "name": "example.org", "status": "active", "paused": false, "type": "full"},
 				},
 				"result_info": map[string]any{"page": 1, "per_page": 50, "count": 2, "total_pages": 1, "total_count": 2},
 			}), nil
@@ -31,12 +31,12 @@ func TestDiscoverFiltersAndNormalizesAssets(t *testing.T) {
 			return jsonResponse(t, map[string]any{
 				"success": true,
 				"result": []map[string]any{
-					{"id": "1", "name": "api.together.ai", "type": "CNAME", "content": "svc.example.net", "proxied": true},
-					{"id": "2", "name": "internal.together.ai", "type": "A", "content": "10.0.0.4", "proxied": false},
-					{"id": "3", "name": "_acme-challenge.together.ai", "type": "CNAME", "content": "validation.example.net", "proxied": false},
-					{"id": "4", "name": "*.together.ai", "type": "CNAME", "content": "wildcard.example.net", "proxied": false},
-					{"id": "5", "name": "mail.together.ai", "type": "MX", "content": "mx.example.net", "proxied": false},
-					{"id": "6", "name": "www.together.ai", "type": "A", "content": "8.8.8.8", "proxied": false},
+					{"id": "1", "name": "api.example.net", "type": "CNAME", "content": "svc.example.net", "proxied": true},
+					{"id": "2", "name": "internal.example.net", "type": "A", "content": "10.0.0.4", "proxied": false},
+					{"id": "3", "name": "_acme-challenge.example.net", "type": "CNAME", "content": "validation.example.net", "proxied": false},
+					{"id": "4", "name": "*.example.net", "type": "CNAME", "content": "wildcard.example.net", "proxied": false},
+					{"id": "5", "name": "mail.example.net", "type": "MX", "content": "mx.example.net", "proxied": false},
+					{"id": "6", "name": "admin.example.net", "type": "A", "content": "8.8.8.8", "proxied": false},
 				},
 				"result_info": map[string]any{"page": 1, "per_page": 500, "count": 6, "total_pages": 1, "total_count": 6},
 			}), nil
@@ -44,7 +44,7 @@ func TestDiscoverFiltersAndNormalizesAssets(t *testing.T) {
 			return jsonResponse(t, map[string]any{
 				"success": true,
 				"result": []map[string]any{
-					{"id": "7", "name": "openchatkit.ai", "type": "CNAME", "content": "api.together.xyz", "proxied": true},
+					{"id": "7", "name": "example.org", "type": "CNAME", "content": "api.example.net", "proxied": true},
 				},
 				"result_info": map[string]any{"page": 1, "per_page": 500, "count": 1, "total_pages": 1, "total_count": 1},
 			}), nil
@@ -58,9 +58,9 @@ func TestDiscoverFiltersAndNormalizesAssets(t *testing.T) {
 	}
 
 	assets, err := client.Discover(context.Background(), DiscoverOptions{
-		Zones:   []string{"together.ai", "openchatkit.ai"},
-		Include: []string{"*.together.ai", "openchatkit.ai"},
-		Exclude: []string{"internal.together.ai"},
+		Zones:   []string{"example.net", "example.org"},
+		Include: []string{"*.example.net", "example.org"},
+		Exclude: []string{"internal.example.net"},
 	})
 	if err != nil {
 		t.Fatalf("Discover returned error: %v", err)
@@ -69,18 +69,18 @@ func TestDiscoverFiltersAndNormalizesAssets(t *testing.T) {
 	if len(assets) != 3 {
 		t.Fatalf("expected 3 assets, got %d: %#v", len(assets), assets)
 	}
-	if assets[0].Zone != "openchatkit.ai" || assets[0].Hostname != "openchatkit.ai" {
+	if assets[0].Zone != "example.net" || assets[0].Hostname != "admin.example.net" {
 		t.Fatalf("unexpected first asset ordering: %#v", assets[0])
 	}
-	if assets[1].Hostname != "api.together.ai" || !assets[1].Proxied {
-		t.Fatalf("expected proxied api.together.ai asset, got %#v", assets[1])
+	if assets[1].Hostname != "api.example.net" || !assets[1].Proxied {
+		t.Fatalf("expected proxied api.example.net asset, got %#v", assets[1])
 	}
-	if assets[2].Hostname != "www.together.ai" {
-		t.Fatalf("expected www.together.ai asset, got %#v", assets[2])
+	if assets[2].Zone != "example.org" || assets[2].Hostname != "example.org" {
+		t.Fatalf("expected example.org asset, got %#v", assets[2])
 	}
 
 	hostnames := Hostnames(assets)
-	if strings.Join(hostnames, ",") != "api.together.ai,openchatkit.ai,www.together.ai" {
+	if strings.Join(hostnames, ",") != "admin.example.net,api.example.net,example.org" {
 		t.Fatalf("unexpected hostnames: %v", hostnames)
 	}
 }
@@ -131,10 +131,10 @@ func TestPatternMatches(t *testing.T) {
 		pattern string
 		match   bool
 	}{
-		{host: "api.together.ai", pattern: "*.together.ai", match: true},
-		{host: "api.together.ai", pattern: "together.ai", match: true},
-		{host: "api.together.ai", pattern: "api.together.ai", match: true},
-		{host: "api.together.ai", pattern: "admin.together.ai", match: false},
+		{host: "api.example.net", pattern: "*.example.net", match: true},
+		{host: "api.example.net", pattern: "example.net", match: true},
+		{host: "api.example.net", pattern: "api.example.net", match: true},
+		{host: "api.example.net", pattern: "admin.example.net", match: false},
 	}
 
 	for _, test := range tests {
@@ -164,12 +164,12 @@ func TestNewClientRejectsEmptyToken(t *testing.T) {
 
 func TestBuildInventorySnapshot(t *testing.T) {
 	snapshot := BuildInventorySnapshot(time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC), []Asset{
-		{Zone: "together.ai", Hostname: "api.together.ai", RecordType: "CNAME", Value: "svc.example.net", Proxied: true, Source: "cloudflare"},
-		{Zone: "together.ai", Hostname: "www.together.ai", RecordType: "A", Value: "8.8.8.8", Proxied: false, Source: "cloudflare"},
+		{Zone: "example.net", Hostname: "api.example.net", RecordType: "CNAME", Value: "svc.example.net", Proxied: true, Source: "cloudflare"},
+		{Zone: "example.net", Hostname: "admin.example.net", RecordType: "A", Value: "8.8.8.8", Proxied: false, Source: "cloudflare"},
 	}, DiscoverOptions{
-		Zones:   []string{"together.ai", "together.ai"},
-		Include: []string{"*.together.ai"},
-		Exclude: []string{"internal.together.ai"},
+		Zones:   []string{"example.net", "example.net"},
+		Include: []string{"*.example.net"},
+		Exclude: []string{"internal.example.net"},
 	})
 
 	if snapshot.GeneratedAt != "2026-03-07T12:00:00Z" {
@@ -178,10 +178,10 @@ func TestBuildInventorySnapshot(t *testing.T) {
 	if snapshot.AssetCount != 2 {
 		t.Fatalf("unexpected asset_count: %d", snapshot.AssetCount)
 	}
-	if len(snapshot.Zones) != 1 || snapshot.Zones[0] != "together.ai" {
+	if len(snapshot.Zones) != 1 || snapshot.Zones[0] != "example.net" {
 		t.Fatalf("unexpected zones: %v", snapshot.Zones)
 	}
-	if len(snapshot.ZoneFilters) != 1 || snapshot.ZoneFilters[0] != "together.ai" {
+	if len(snapshot.ZoneFilters) != 1 || snapshot.ZoneFilters[0] != "example.net" {
 		t.Fatalf("unexpected zone filters: %v", snapshot.ZoneFilters)
 	}
 }
@@ -190,32 +190,32 @@ func TestDiffInventory(t *testing.T) {
 	previous := InventorySnapshot{
 		GeneratedAt: "2026-03-06T10:00:00Z",
 		Assets: []Asset{
-			{Zone: "together.ai", Hostname: "api.together.ai", RecordType: "CNAME", Value: "old.example.net", Proxied: true, Source: "cloudflare"},
-			{Zone: "together.ai", Hostname: "legacy.together.ai", RecordType: "A", Value: "8.8.8.8", Proxied: false, Source: "cloudflare"},
-			{Zone: "together.ai", Hostname: "app.together.ai", RecordType: "CNAME", Value: "svc.example.net", Proxied: false, Source: "cloudflare"},
+			{Zone: "example.net", Hostname: "api.example.net", RecordType: "CNAME", Value: "old.example.net", Proxied: true, Source: "cloudflare"},
+			{Zone: "example.net", Hostname: "legacy.example.net", RecordType: "A", Value: "8.8.8.8", Proxied: false, Source: "cloudflare"},
+			{Zone: "example.net", Hostname: "app.example.net", RecordType: "CNAME", Value: "svc.example.net", Proxied: false, Source: "cloudflare"},
 		},
 	}
 	current := InventorySnapshot{
 		GeneratedAt: "2026-03-07T10:00:00Z",
 		Assets: []Asset{
-			{Zone: "together.ai", Hostname: "api.together.ai", RecordType: "CNAME", Value: "new.example.net", Proxied: true, Source: "cloudflare"},
-			{Zone: "together.ai", Hostname: "app.together.ai", RecordType: "CNAME", Value: "svc.example.net", Proxied: true, Source: "cloudflare"},
-			{Zone: "together.ai", Hostname: "new.together.ai", RecordType: "A", Value: "1.1.1.1", Proxied: false, Source: "cloudflare"},
+			{Zone: "example.net", Hostname: "api.example.net", RecordType: "CNAME", Value: "new.example.net", Proxied: true, Source: "cloudflare"},
+			{Zone: "example.net", Hostname: "app.example.net", RecordType: "CNAME", Value: "svc.example.net", Proxied: true, Source: "cloudflare"},
+			{Zone: "example.net", Hostname: "new.example.net", RecordType: "A", Value: "1.1.1.1", Proxied: false, Source: "cloudflare"},
 		},
 	}
 
 	diff := DiffInventory(time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC), previous, current)
 
-	if diff.AddedCount != 2 {
+	if diff.AddedCount != 1 {
 		t.Fatalf("unexpected added count: %d", diff.AddedCount)
 	}
-	if diff.RemovedCount != 2 {
+	if diff.RemovedCount != 1 {
 		t.Fatalf("unexpected removed count: %d", diff.RemovedCount)
 	}
-	if diff.ChangedCount != 1 {
+	if diff.ChangedCount != 2 {
 		t.Fatalf("unexpected changed count: %d", diff.ChangedCount)
 	}
-	if len(diff.Changed) != 1 || diff.Changed[0].After.Hostname != "app.together.ai" {
+	if len(diff.Changed) != 2 || diff.Changed[0].After.Hostname != "api.example.net" || diff.Changed[1].After.Hostname != "app.example.net" {
 		t.Fatalf("unexpected changed assets: %#v", diff.Changed)
 	}
 }
@@ -223,19 +223,23 @@ func TestDiffInventory(t *testing.T) {
 func TestHostnamesFromDiff(t *testing.T) {
 	diff := InventoryDiff{
 		Added: []Asset{
-			{Zone: "together.ai", Hostname: "new.together.ai", RecordType: "A", Value: "1.1.1.1", Source: "cloudflare"},
-			{Zone: "together.ai", Hostname: "new.together.ai", RecordType: "AAAA", Value: "2606:4700::1111", Source: "cloudflare"},
+			{Zone: "example.net", Hostname: "new.example.net", RecordType: "A", Value: "1.1.1.1", Source: "cloudflare"},
+			{Zone: "example.net", Hostname: "new.example.net", RecordType: "AAAA", Value: "2606:4700::1111", Source: "cloudflare"},
 		},
 		Changed: []AssetChange{
 			{
-				Before: Asset{Zone: "together.ai", Hostname: "app.together.ai", RecordType: "CNAME", Value: "old.example.net", Source: "cloudflare"},
-				After:  Asset{Zone: "together.ai", Hostname: "app.together.ai", RecordType: "CNAME", Value: "new.example.net", Source: "cloudflare"},
+				Before: Asset{Zone: "example.net", Hostname: "api.example.net", RecordType: "CNAME", Value: "old.example.net", Source: "cloudflare"},
+				After:  Asset{Zone: "example.net", Hostname: "api.example.net", RecordType: "CNAME", Value: "new.example.net", Source: "cloudflare"},
+			},
+			{
+				Before: Asset{Zone: "example.net", Hostname: "app.example.net", RecordType: "CNAME", Value: "old.example.net", Source: "cloudflare"},
+				After:  Asset{Zone: "example.net", Hostname: "app.example.net", RecordType: "CNAME", Value: "new.example.net", Source: "cloudflare"},
 			},
 		},
 	}
 
 	got := HostnamesFromDiff(diff)
-	want := []string{"app.together.ai", "new.together.ai"}
+	want := []string{"api.example.net", "app.example.net", "new.example.net"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("unexpected diff hostnames: got %v want %v", got, want)
 	}
