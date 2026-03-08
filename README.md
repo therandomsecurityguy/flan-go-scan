@@ -2,6 +2,10 @@
 
 # flan
 
+[![Go 1.23+](https://img.shields.io/badge/Go-1.23%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
+[![License: BSD 3-Clause](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](LICENSE)
+[![CI](https://github.com/therandomsecurityguy/flan-go-scan/actions/workflows/ci.yml/badge.svg)](https://github.com/therandomsecurityguy/flan-go-scan/actions/workflows/ci.yml)
+
 A swiss-army scanner in Go. Successor to [Flan Scan](https://github.com/cloudflare/flan).
 
 ## Features
