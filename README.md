@@ -203,6 +203,8 @@ DNS resolution behavior: Flan uses a deterministic resolver chain (custom resolv
 Cloudflare discovery behavior: Flan uses zones as the discovery boundary, keeps `A`, `AAAA`, and `CNAME` scan candidates, and skips validation, wildcard, and non-public-IP records by default.
 When Cloudflare discovery is enabled, Flan can also persist a normalized inventory snapshot, compare it against a prior snapshot, and optionally narrow scans to added/changed hosts for scheduled delta workflows.
 
+For GitHub Actions automation, set the repository secret `CLOUDFLARE_API_TOKEN`. Optional repository variables for the Cloudflare workflows are `CLOUDFLARE_ZONES`, `CLOUDFLARE_INCLUDE`, `CLOUDFLARE_EXCLUDE`, and `CLOUDFLARE_TOP_PORTS`. Manual workflow runs can override those values with workflow inputs.
+
 Guardrails and DNS policy are configurable in `config/config.yaml`:
 
 ```yaml
