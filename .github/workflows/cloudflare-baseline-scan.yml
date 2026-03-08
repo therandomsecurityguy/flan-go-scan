@@ -1,0 +1,61 @@
+name: Cloudflare Baseline Scan
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "43 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-baseline-scan
+  cancel-in-progress: false
+
+jobs:
+  baseline-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      REPORTS_DIR: reports
+      INVENTORY_PATH: reports/cloudflare-inventory-baseline.json
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build flan
+        run: go build -o flan ./cmd/flan
+
+      - name: Prepare reports directory
+        run: mkdir -p "${REPORTS_DIR}"
+
+      - name: Run Cloudflare baseline scan
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          ./flan \
+            --cloudflare \
+            --cloudflare-inventory-out "${INVENTORY_PATH}"
+
+      - name: Upload baseline inventory snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudflare-baseline-inventory-${{ github.run_id }}
+          path: ${{ env.INVENTORY_PATH }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload baseline scan reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudflare-baseline-reports-${{ github.run_id }}
+          path: ${{ env.REPORTS_DIR }}
+          if-no-files-found: warn
+          retention-days: 30
