@@ -1,0 +1,106 @@
+name: Cloudflare Baseline Scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      cloudflare_zones:
+        description: Comma-separated Cloudflare zones to scan
+        required: false
+        type: string
+      cloudflare_include:
+        description: Comma-separated hostname include filters
+        required: false
+        type: string
+      cloudflare_exclude:
+        description: Comma-separated hostname exclude filters
+        required: false
+        type: string
+      top_ports:
+        description: Top port preset for scanning (100, 1000, 2000, 5000)
+        required: false
+        type: string
+  schedule:
+    - cron: "43 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-baseline-scan
+  cancel-in-progress: false
+
+jobs:
+  baseline-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      REPORTS_DIR: reports
+      INVENTORY_PATH: reports/cloudflare-inventory-baseline.json
+      WORKFLOW_CLOUDFLARE_ZONES: ${{ inputs.cloudflare_zones || '' }}
+      WORKFLOW_CLOUDFLARE_INCLUDE: ${{ inputs.cloudflare_include || '' }}
+      WORKFLOW_CLOUDFLARE_EXCLUDE: ${{ inputs.cloudflare_exclude || '' }}
+      WORKFLOW_TOP_PORTS: ${{ inputs.top_ports || '' }}
+      SECRET_CLOUDFLARE_ZONES: ${{ secrets.CLOUDFLARE_ZONES || '' }}
+      SECRET_CLOUDFLARE_INCLUDE: ${{ secrets.CLOUDFLARE_INCLUDE || '' }}
+      SECRET_CLOUDFLARE_EXCLUDE: ${{ secrets.CLOUDFLARE_EXCLUDE || '' }}
+      SECRET_TOP_PORTS: ${{ secrets.CLOUDFLARE_TOP_PORTS || '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build flan
+        run: go build -o flan ./cmd/flan
+
+      - name: Prepare reports directory
+        run: mkdir -p "${REPORTS_DIR}"
+
+      - name: Run Cloudflare baseline scan
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          zones="${WORKFLOW_CLOUDFLARE_ZONES:-${SECRET_CLOUDFLARE_ZONES}}"
+          include="${WORKFLOW_CLOUDFLARE_INCLUDE:-${SECRET_CLOUDFLARE_INCLUDE}}"
+          exclude="${WORKFLOW_CLOUDFLARE_EXCLUDE:-${SECRET_CLOUDFLARE_EXCLUDE}}"
+          top_ports="${WORKFLOW_TOP_PORTS:-${SECRET_TOP_PORTS}}"
+
+          args=(
+            --cloudflare
+            --cloudflare-inventory-out "${INVENTORY_PATH}"
+          )
+          if [[ -n "${zones}" ]]; then
+            args+=(--cloudflare-zones "${zones}")
+          fi
+          if [[ -n "${include}" ]]; then
+            args+=(--cloudflare-include "${include}")
+          fi
+          if [[ -n "${exclude}" ]]; then
+            args+=(--cloudflare-exclude "${exclude}")
+          fi
+          if [[ -n "${top_ports}" ]]; then
+            args+=(--top-ports "${top_ports}")
+          fi
+
+          ./flan "${args[@]}"
+
+      - name: Upload baseline inventory snapshot
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cloudflare-baseline-inventory-${{ github.run_id }}
+          path: ${{ env.INVENTORY_PATH }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload baseline scan reports
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cloudflare-baseline-reports-${{ github.run_id }}
+          path: ${{ env.REPORTS_DIR }}
+          if-no-files-found: warn
+          retention-days: 30

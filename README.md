@@ -2,6 +2,10 @@
 
 # flan
 
+[![Go 1.23+](https://img.shields.io/badge/Go-1.23%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
+[![License: BSD 3-Clause](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](LICENSE)
+[![CI](https://github.com/therandomsecurityguy/flan-go-scan/actions/workflows/ci.yml/badge.svg)](https://github.com/therandomsecurityguy/flan-go-scan/actions/workflows/ci.yml)
+
 A swiss-army scanner in Go. Successor to [Flan Scan](https://github.com/cloudflare/flan).
 
 ## Features
@@ -16,6 +20,7 @@ A swiss-army scanner in Go. Successor to [Flan Scan](https://github.com/cloudfla
 - Passive subdomain enumeration via 10 no-key sources (crt.sh, Common Crawl, Wayback Machine, RapidDNS, Anubis, Digitorus, HudsonRock, SiteDossier, THC, ThreatCrowd)
 - CDN detection (Cloudflare) — limits scan to ports 80/443 by default on CDN hosts
 - DNS enumeration with wildcard detection and custom wordlist/resolver support
+- Cloudflare zone-based target discovery via `CLOUDFLARE_API_TOKEN`
 - NS, MX, TXT, CNAME record lookups
 - CIDR and stdin input support
 - nmap top 100/1000 port lists with expanded 2000/5000 presets
@@ -127,6 +132,42 @@ Scan all ports on CDN hosts (default is 80/443 only):
 flan -d example.com --scan-cdn
 ```
 
+Discover scan targets from Cloudflare zones:
+
+```
+flan --cloudflare --cloudflare-zones example.net --cloudflare-include api.example.net
+```
+
+Limit Cloudflare discovery to matching hostnames:
+
+```
+flan --cloudflare --cloudflare-zones example.net --cloudflare-include "api.example.net" --cloudflare-exclude "internal.example.net"
+```
+
+Print Cloudflare-discovered hostnames only:
+
+```
+flan --cloudflare --cloudflare-zones example.net --cloudflare-include "api.example.net" --subdomains-only
+```
+
+Write a normalized Cloudflare inventory snapshot for later diffing:
+
+```
+flan --cloudflare --cloudflare-zones example.net --cloudflare-include "api.example.net" --cloudflare-inventory-out reports/cloudflare-example-net.json
+```
+
+Diff the current Cloudflare inventory against a previous snapshot:
+
+```
+flan --cloudflare --cloudflare-zones example.net --cloudflare-include "api.example.net" --cloudflare-inventory-out reports/cloudflare-example-net.json --cloudflare-diff-against reports/cloudflare-example-net-prev.json
+```
+
+Scan only added/changed Cloudflare hosts when a previous snapshot exists:
+
+```
+flan --cloudflare --cloudflare-zones example.net --cloudflare-include "api.example.net" --cloudflare-inventory-out reports/cloudflare-example-net.json --cloudflare-delta-only
+```
+
 Enable UDP scanning:
 
 ```
@@ -163,6 +204,11 @@ Header inspection behavior: security-header findings are generated for HTTP `2xx
 
 DNS resolution behavior: Flan uses a deterministic resolver chain (custom resolver when provided, otherwise system resolver, then configured fallbacks) and records resolver/cache stats in scan metadata.
 
+Cloudflare discovery behavior: Flan uses zones as the discovery boundary, keeps `A`, `AAAA`, and `CNAME` scan candidates, and skips validation, wildcard, and non-public-IP records by default.
+When Cloudflare discovery is enabled, Flan can also persist a normalized inventory snapshot, compare it against a prior snapshot, and optionally narrow scans to added/changed hosts for scheduled delta workflows. If `--cloudflare-diff-against` is omitted but `--cloudflare-inventory-out` is set, Flan reuses the inventory output path as the diff base.
+
+For GitHub Actions automation, set the repository secret `CLOUDFLARE_API_TOKEN`. If you do not want Cloudflare scope in plaintext repo settings, either pass zones/include/exclude as manual workflow inputs or store them in secrets named `CLOUDFLARE_ZONES`, `CLOUDFLARE_INCLUDE`, `CLOUDFLARE_EXCLUDE`, and `CLOUDFLARE_TOP_PORTS`.
+
 Guardrails and DNS policy are configurable in `config/config.yaml`:
 
 ```yaml
@@ -174,6 +220,16 @@ dns:
   resolver: ""
   fallback_resolvers: ["1.1.1.1:53", "8.8.8.8:53"]
   lookup_timeout: 3s
+cloudflare:
+  enabled: false
+  zones: []
+  include: []
+  exclude: []
+  token_env: CLOUDFLARE_API_TOKEN
+  timeout: 15s
+  inventory_out: ""
+  diff_against: ""
+  delta_only: false
 ```
 
 ## Flags
@@ -189,6 +245,13 @@ dns:
 | `-c` | Config file (default `config/config.yaml`) |
 | `-w` | Custom DNS subdomain wordlist |
 | `-r` | Custom DNS resolver (ip:port) |
+| `--cloudflare` | Discover scan targets from Cloudflare zone DNS records |
+| `--cloudflare-zones` | Comma-separated Cloudflare zone filter |
+| `--cloudflare-include` | Comma-separated hostname include filters |
+| `--cloudflare-exclude` | Comma-separated hostname exclude filters |
+| `--cloudflare-inventory-out` | Write normalized Cloudflare inventory snapshot to this path |
+| `--cloudflare-diff-against` | Compare the current Cloudflare inventory against a previous snapshot; defaults to `--cloudflare-inventory-out` when omitted |
+| `--cloudflare-delta-only` | Scan only added/changed Cloudflare hosts when a previous snapshot is available |
 | `--passive-only` | Skip brute-force, use passive sources only |
 | `--subdomains-only` | Print discovered subdomains and exit (no port scan) |
 | `--subfinder-sources` | Comma-separated passive sources override |

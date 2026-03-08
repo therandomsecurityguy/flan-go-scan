@@ -46,6 +46,17 @@ type Config struct {
 	Checkpoint struct {
 		File string `mapstructure:"file"`
 	} `mapstructure:"checkpoint"`
+	Cloudflare struct {
+		Enabled      bool          `mapstructure:"enabled"`
+		Zones        []string      `mapstructure:"zones"`
+		Include      []string      `mapstructure:"include"`
+		Exclude      []string      `mapstructure:"exclude"`
+		TokenEnv     string        `mapstructure:"token_env"`
+		Timeout      time.Duration `mapstructure:"timeout"`
+		InventoryOut string        `mapstructure:"inventory_out"`
+		DiffAgainst  string        `mapstructure:"diff_against"`
+		DeltaOnly    bool          `mapstructure:"delta_only"`
+	} `mapstructure:"cloudflare"`
 }
 
 func defaults() *Config {
@@ -78,6 +89,12 @@ func defaults() *Config {
 	cfg.Output.Format = "jsonl"
 	cfg.Output.Directory = "-"
 	cfg.Checkpoint.File = "scan-state.json"
+	cfg.Cloudflare.Enabled = false
+	cfg.Cloudflare.TokenEnv = "CLOUDFLARE_API_TOKEN"
+	cfg.Cloudflare.Timeout = 15 * time.Second
+	cfg.Cloudflare.InventoryOut = ""
+	cfg.Cloudflare.DiffAgainst = ""
+	cfg.Cloudflare.DeltaOnly = false
 	return cfg
 }
 

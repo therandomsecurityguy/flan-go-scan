@@ -1,0 +1,599 @@
+package cloudflare
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"net/url"
+	"path"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const defaultBaseURL = "https://api.cloudflare.com/client/v4"
+const maxHTTPAttempts = 3
+
+type Client struct {
+	token      string
+	baseURL    string
+	httpClient *http.Client
+}
+
+type Zone struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Paused bool   `json:"paused"`
+	Type   string `json:"type"`
+}
+
+type DNSRecord struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Content string `json:"content"`
+	Proxied bool   `json:"proxied"`
+}
+
+type Asset struct {
+	Zone       string `json:"zone"`
+	Hostname   string `json:"hostname"`
+	RecordType string `json:"record_type"`
+	Value      string `json:"value"`
+	Proxied    bool   `json:"proxied"`
+	Source     string `json:"source"`
+}
+
+type InventorySnapshot struct {
+	GeneratedAt string   `json:"generated_at"`
+	Source      string   `json:"source"`
+	Zones       []string `json:"zones,omitempty"`
+	ZoneFilters []string `json:"zone_filters,omitempty"`
+	Include     []string `json:"include,omitempty"`
+	Exclude     []string `json:"exclude,omitempty"`
+	AssetCount  int      `json:"asset_count"`
+	Assets      []Asset  `json:"assets"`
+}
+
+type InventoryDiff struct {
+	GeneratedAt         string        `json:"generated_at"`
+	Source              string        `json:"source"`
+	PreviousGeneratedAt string        `json:"previous_generated_at,omitempty"`
+	CurrentGeneratedAt  string        `json:"current_generated_at,omitempty"`
+	AddedCount          int           `json:"added_count"`
+	RemovedCount        int           `json:"removed_count"`
+	ChangedCount        int           `json:"changed_count"`
+	Added               []Asset       `json:"added,omitempty"`
+	Removed             []Asset       `json:"removed,omitempty"`
+	Changed             []AssetChange `json:"changed,omitempty"`
+}
+
+type AssetChange struct {
+	Before Asset `json:"before"`
+	After  Asset `json:"after"`
+}
+
+type DiscoverOptions struct {
+	Zones    []string
+	Include  []string
+	Exclude  []string
+	PageSize int
+}
+
+type apiEnvelope[T any] struct {
+	Success bool `json:"success"`
+	Errors  []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+	Result     []T `json:"result"`
+	ResultInfo struct {
+		Page       int `json:"page"`
+		PerPage    int `json:"per_page"`
+		Count      int `json:"count"`
+		TotalPages int `json:"total_pages"`
+		TotalCount int `json:"total_count"`
+	} `json:"result_info"`
+}
+
+type apiEnvelopeChecker interface {
+	success() bool
+	errorMessage() string
+}
+
+func (e *apiEnvelope[T]) success() bool {
+	return e.Success
+}
+
+func (e *apiEnvelope[T]) errorMessage() string {
+	return joinErrors(e.Errors)
+}
+
+func NewClient(token string, timeout time.Duration) (*Client, error) {
+	if strings.TrimSpace(token) == "" {
+		return nil, fmt.Errorf("cloudflare token is required")
+	}
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	return &Client{
+		token:      token,
+		baseURL:    defaultBaseURL,
+		httpClient: &http.Client{Timeout: timeout},
+	}, nil
+}
+
+func NewClientForTesting(token string, baseURL string, httpClient *http.Client) (*Client, error) {
+	if strings.TrimSpace(token) == "" {
+		return nil, fmt.Errorf("cloudflare token is required")
+	}
+	if strings.TrimSpace(baseURL) == "" {
+		return nil, fmt.Errorf("cloudflare base url is required")
+	}
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 15 * time.Second}
+	}
+	return &Client{
+		token:      token,
+		baseURL:    strings.TrimRight(baseURL, "/"),
+		httpClient: httpClient,
+	}, nil
+}
+
+func (c *Client) Discover(ctx context.Context, opts DiscoverOptions) ([]Asset, error) {
+	zones, err := c.ListZones(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	zoneFilter := normalizeSet(opts.Zones)
+	include := normalizePatterns(opts.Include)
+	exclude := normalizePatterns(opts.Exclude)
+	pageSize := opts.PageSize
+	if pageSize <= 0 {
+		pageSize = 500
+	}
+
+	seen := make(map[string]struct{})
+	var assets []Asset
+	for _, zone := range zones {
+		if len(zoneFilter) > 0 {
+			if _, ok := zoneFilter[normalizeHost(zone.Name)]; !ok {
+				continue
+			}
+		}
+		records, err := c.ListDNSRecords(ctx, zone.ID, pageSize)
+		if err != nil {
+			return nil, fmt.Errorf("list dns records for zone %s: %w", zone.Name, err)
+		}
+		for _, record := range records {
+			asset, ok := normalizeAsset(zone, record, include, exclude)
+			if !ok {
+				continue
+			}
+			identity := assetIdentity(asset)
+			if _, exists := seen[identity]; exists {
+				continue
+			}
+			seen[identity] = struct{}{}
+			assets = append(assets, asset)
+		}
+	}
+
+	sort.Slice(assets, func(i, j int) bool {
+		if assets[i].Zone != assets[j].Zone {
+			return assets[i].Zone < assets[j].Zone
+		}
+		if assets[i].Hostname != assets[j].Hostname {
+			return assets[i].Hostname < assets[j].Hostname
+		}
+		if assets[i].RecordType != assets[j].RecordType {
+			return assets[i].RecordType < assets[j].RecordType
+		}
+		return assets[i].Value < assets[j].Value
+	})
+	return assets, nil
+}
+
+func (c *Client) ListZones(ctx context.Context, opts DiscoverOptions) ([]Zone, error) {
+	pageSize := opts.PageSize
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	var zones []Zone
+	for page := 1; ; page++ {
+		var env apiEnvelope[Zone]
+		if err := c.get(ctx, "/zones", url.Values{
+			"page":     []string{fmt.Sprintf("%d", page)},
+			"per_page": []string{fmt.Sprintf("%d", pageSize)},
+		}, &env); err != nil {
+			return nil, fmt.Errorf("list zones page %d: %w", page, err)
+		}
+		zones = append(zones, env.Result...)
+		if env.ResultInfo.TotalPages <= page || len(env.Result) == 0 {
+			break
+		}
+	}
+	sort.Slice(zones, func(i, j int) bool {
+		return normalizeHost(zones[i].Name) < normalizeHost(zones[j].Name)
+	})
+	return zones, nil
+}
+
+func (c *Client) ListDNSRecords(ctx context.Context, zoneID string, pageSize int) ([]DNSRecord, error) {
+	if strings.TrimSpace(zoneID) == "" {
+		return nil, fmt.Errorf("zone id is required")
+	}
+	if pageSize <= 0 {
+		pageSize = 500
+	}
+	var records []DNSRecord
+	for page := 1; ; page++ {
+		var env apiEnvelope[DNSRecord]
+		if err := c.get(ctx, path.Join("/zones", zoneID, "dns_records"), url.Values{
+			"page":     []string{fmt.Sprintf("%d", page)},
+			"per_page": []string{fmt.Sprintf("%d", pageSize)},
+		}, &env); err != nil {
+			return nil, fmt.Errorf("list dns records page %d: %w", page, err)
+		}
+		records = append(records, env.Result...)
+		if env.ResultInfo.TotalPages <= page || len(env.Result) == 0 {
+			break
+		}
+	}
+	return records, nil
+}
+
+func normalizeAsset(zone Zone, record DNSRecord, include, exclude []string) (Asset, bool) {
+	recordType := strings.ToUpper(strings.TrimSpace(record.Type))
+	if !isScannableRecordType(recordType) {
+		return Asset{}, false
+	}
+
+	hostname := normalizeHost(record.Name)
+	if hostname == "" || isValidationRecordName(hostname) {
+		return Asset{}, false
+	}
+	if !matchesAny(hostname, include, true) || matchesAny(hostname, exclude, false) {
+		return Asset{}, false
+	}
+
+	value := strings.TrimSpace(record.Content)
+	if recordType == "A" || recordType == "AAAA" {
+		if !isPublicIP(value) {
+			return Asset{}, false
+		}
+	}
+
+	return Asset{
+		Zone:       normalizeHost(zone.Name),
+		Hostname:   hostname,
+		RecordType: recordType,
+		Value:      value,
+		Proxied:    record.Proxied,
+		Source:     "cloudflare",
+	}, true
+}
+
+func Hostnames(assets []Asset) []string {
+	seen := make(map[string]struct{}, len(assets))
+	hostnames := make([]string, 0, len(assets))
+	for _, asset := range assets {
+		hostname := normalizeHost(asset.Hostname)
+		if hostname == "" {
+			continue
+		}
+		if _, ok := seen[hostname]; ok {
+			continue
+		}
+		seen[hostname] = struct{}{}
+		hostnames = append(hostnames, hostname)
+	}
+	sort.Strings(hostnames)
+	return hostnames
+}
+
+func BuildInventorySnapshot(now time.Time, assets []Asset, opts DiscoverOptions) InventorySnapshot {
+	return InventorySnapshot{
+		GeneratedAt: now.UTC().Format(time.RFC3339),
+		Source:      "cloudflare",
+		Zones:       zonesFromAssets(assets),
+		ZoneFilters: uniqueSortedValues(opts.Zones),
+		Include:     uniqueSortedValues(opts.Include),
+		Exclude:     uniqueSortedValues(opts.Exclude),
+		AssetCount:  len(assets),
+		Assets:      append([]Asset(nil), assets...),
+	}
+}
+
+func DiffInventory(now time.Time, previous, current InventorySnapshot) InventoryDiff {
+	prevByKey := make(map[string]Asset, len(previous.Assets))
+	currByKey := make(map[string]Asset, len(current.Assets))
+
+	for _, asset := range previous.Assets {
+		prevByKey[assetChangeKey(asset)] = asset
+	}
+	for _, asset := range current.Assets {
+		currByKey[assetChangeKey(asset)] = asset
+	}
+
+	diff := InventoryDiff{
+		GeneratedAt:         now.UTC().Format(time.RFC3339),
+		Source:              "cloudflare",
+		PreviousGeneratedAt: previous.GeneratedAt,
+		CurrentGeneratedAt:  current.GeneratedAt,
+	}
+
+	for key, currentAsset := range currByKey {
+		previousAsset, existed := prevByKey[key]
+		if !existed {
+			diff.Added = append(diff.Added, currentAsset)
+			continue
+		}
+		if assetIdentity(previousAsset) != assetIdentity(currentAsset) ||
+			previousAsset.Proxied != currentAsset.Proxied ||
+			previousAsset.Source != currentAsset.Source {
+			diff.Changed = append(diff.Changed, AssetChange{Before: previousAsset, After: currentAsset})
+		}
+	}
+
+	for key, previousAsset := range prevByKey {
+		if _, exists := currByKey[key]; !exists {
+			diff.Removed = append(diff.Removed, previousAsset)
+		}
+	}
+
+	sort.Slice(diff.Added, func(i, j int) bool {
+		return assetKey(diff.Added[i]) < assetKey(diff.Added[j])
+	})
+	sort.Slice(diff.Removed, func(i, j int) bool {
+		return assetKey(diff.Removed[i]) < assetKey(diff.Removed[j])
+	})
+	sort.Slice(diff.Changed, func(i, j int) bool {
+		return assetChangeKey(diff.Changed[i].After) < assetChangeKey(diff.Changed[j].After)
+	})
+
+	diff.AddedCount = len(diff.Added)
+	diff.RemovedCount = len(diff.Removed)
+	diff.ChangedCount = len(diff.Changed)
+
+	return diff
+}
+
+func HostnamesFromDiff(diff InventoryDiff) []string {
+	var assets []Asset
+	assets = append(assets, diff.Added...)
+	for _, change := range diff.Changed {
+		assets = append(assets, change.After)
+	}
+	return Hostnames(assets)
+}
+
+func (c *Client) get(ctx context.Context, endpoint string, query url.Values, dst any) error {
+	u, err := url.Parse(c.baseURL)
+	if err != nil {
+		return fmt.Errorf("parse base url: %w", err)
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + endpoint
+	if len(query) > 0 {
+		u.RawQuery = query.Encode()
+	}
+
+	for attempt := 0; attempt < maxHTTPAttempts; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+		if err != nil {
+			return fmt.Errorf("build request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+c.token)
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("send request: %w", err)
+		}
+
+		if resp.StatusCode == http.StatusTooManyRequests && attempt+1 < maxHTTPAttempts {
+			delay := retryDelay(resp.Header.Get("Retry-After"), attempt)
+			resp.Body.Close()
+			if err := waitForRetry(ctx, delay); err != nil {
+				return err
+			}
+			continue
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			resp.Body.Close()
+			return fmt.Errorf("unexpected status: %s", resp.Status)
+		}
+		if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
+			resp.Body.Close()
+			return fmt.Errorf("decode response: %w", err)
+		}
+		resp.Body.Close()
+		if env, ok := dst.(apiEnvelopeChecker); ok && !env.success() {
+			return fmt.Errorf("cloudflare api error: %s", env.errorMessage())
+		}
+		return nil
+	}
+
+	return fmt.Errorf("cloudflare request failed after retries")
+}
+
+func joinErrors(errs []struct {
+	Message string `json:"message"`
+}) string {
+	if len(errs) == 0 {
+		return "unknown error"
+	}
+	parts := make([]string, 0, len(errs))
+	for _, err := range errs {
+		if strings.TrimSpace(err.Message) != "" {
+			parts = append(parts, err.Message)
+		}
+	}
+	if len(parts) == 0 {
+		return "unknown error"
+	}
+	return strings.Join(parts, "; ")
+}
+
+func normalizeSet(values []string) map[string]struct{} {
+	if len(values) == 0 {
+		return nil
+	}
+	normalized := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = normalizeHost(value)
+		if value == "" {
+			continue
+		}
+		normalized[value] = struct{}{}
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+func normalizePatterns(values []string) []string {
+	patterns := make([]string, 0, len(values))
+	for _, value := range values {
+		value = normalizeHost(value)
+		if value == "" {
+			continue
+		}
+		patterns = append(patterns, value)
+	}
+	return patterns
+}
+
+func normalizeHost(value string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(value)), ".")
+}
+
+func isScannableRecordType(recordType string) bool {
+	switch recordType {
+	case "A", "AAAA", "CNAME":
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidationRecordName(name string) bool {
+	labels := strings.Split(normalizeHost(name), ".")
+	if len(labels) == 0 {
+		return true
+	}
+	if labels[0] == "*" {
+		return true
+	}
+	for _, label := range labels {
+		if strings.HasPrefix(label, "_") {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesAny(host string, patterns []string, emptyDefault bool) bool {
+	if len(patterns) == 0 {
+		return emptyDefault
+	}
+	for _, pattern := range patterns {
+		if patternMatches(host, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func patternMatches(host, pattern string) bool {
+	if strings.ContainsAny(pattern, "*?[") {
+		ok, err := path.Match(pattern, host)
+		return err == nil && ok
+	}
+	return host == pattern || strings.HasSuffix(host, "."+pattern)
+}
+
+func isPublicIP(value string) bool {
+	ip := net.ParseIP(strings.TrimSpace(value))
+	if ip == nil {
+		return false
+	}
+	if ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return false
+	}
+	if ip4 := ip.To4(); ip4 != nil && ip4[0] == 0 {
+		return false
+	}
+	return true
+}
+
+func retryDelay(value string, attempt int) time.Duration {
+	retryAfter := strings.TrimSpace(value)
+	if retryAfter != "" {
+		if seconds, err := strconv.Atoi(retryAfter); err == nil && seconds > 0 {
+			return time.Duration(seconds) * time.Second
+		}
+		if when, err := http.ParseTime(retryAfter); err == nil {
+			if delay := time.Until(when); delay > 0 {
+				return delay
+			}
+		}
+	}
+	return time.Duration(attempt+1) * time.Second
+}
+
+func waitForRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func uniqueSortedValues(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		value = normalizeHost(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		normalized = append(normalized, value)
+	}
+	sort.Strings(normalized)
+	return normalized
+}
+
+func zonesFromAssets(assets []Asset) []string {
+	values := make([]string, 0, len(assets))
+	for _, asset := range assets {
+		if zone := normalizeHost(asset.Zone); zone != "" {
+			values = append(values, zone)
+		}
+	}
+	return uniqueSortedValues(values)
+}
+
+func assetIdentity(asset Asset) string {
+	return asset.Zone + "|" + asset.Hostname + "|" + asset.RecordType + "|" + asset.Value
+}
+
+func assetChangeKey(asset Asset) string {
+	return asset.Zone + "|" + asset.Hostname + "|" + asset.RecordType
+}
+
+func assetKey(asset Asset) string {
+	return assetIdentity(asset) + "|" + fmt.Sprintf("%t", asset.Proxied)
+}

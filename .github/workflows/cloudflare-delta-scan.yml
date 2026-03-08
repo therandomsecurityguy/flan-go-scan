@@ -1,0 +1,167 @@
+name: Cloudflare Delta Scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      cloudflare_zones:
+        description: Comma-separated Cloudflare zones to scan
+        required: false
+        type: string
+      cloudflare_include:
+        description: Comma-separated hostname include filters
+        required: false
+        type: string
+      cloudflare_exclude:
+        description: Comma-separated hostname exclude filters
+        required: false
+        type: string
+      top_ports:
+        description: Top port preset for scanning (100, 1000, 2000, 5000)
+        required: false
+        type: string
+  schedule:
+    - cron: "17 */6 * * *"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: cloudflare-delta-scan
+  cancel-in-progress: false
+
+jobs:
+  delta-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      REPORTS_DIR: reports
+      INVENTORY_PATH: reports/cloudflare-inventory.json
+      PREVIOUS_INVENTORY_PATH: reports/previous-cloudflare-inventory.json
+      WORKFLOW_CLOUDFLARE_ZONES: ${{ inputs.cloudflare_zones || '' }}
+      WORKFLOW_CLOUDFLARE_INCLUDE: ${{ inputs.cloudflare_include || '' }}
+      WORKFLOW_CLOUDFLARE_EXCLUDE: ${{ inputs.cloudflare_exclude || '' }}
+      WORKFLOW_TOP_PORTS: ${{ inputs.top_ports || '' }}
+      SECRET_CLOUDFLARE_ZONES: ${{ secrets.CLOUDFLARE_ZONES || '' }}
+      SECRET_CLOUDFLARE_INCLUDE: ${{ secrets.CLOUDFLARE_INCLUDE || '' }}
+      SECRET_CLOUDFLARE_EXCLUDE: ${{ secrets.CLOUDFLARE_EXCLUDE || '' }}
+      SECRET_TOP_PORTS: ${{ secrets.CLOUDFLARE_TOP_PORTS || '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build flan
+        run: go build -o flan ./cmd/flan
+
+      - name: Prepare reports directory
+        run: mkdir -p "${REPORTS_DIR}"
+
+      - name: Locate previous inventory artifact
+        id: previous-artifact
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.0.1
+        with:
+          script: |
+            const runs = await github.paginate(
+              github.rest.actions.listWorkflowRuns,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: "cloudflare-delta-scan.yml",
+                branch: context.ref.replace("refs/heads/", ""),
+                status: "completed",
+                per_page: 100,
+              },
+            );
+
+            let latest = null;
+            for (const run of runs) {
+              if (run.id === context.runId || run.conclusion !== "success") {
+                continue;
+              }
+              const artifacts = await github.paginate(
+                github.rest.actions.listWorkflowRunArtifacts,
+                {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: run.id,
+                  per_page: 100,
+                },
+              );
+              latest = artifacts.find((artifact) => !artifact.expired && artifact.name === "cloudflare-inventory-latest");
+              if (latest) {
+                break;
+              }
+            }
+
+            core.setOutput("url", latest ? latest.archive_download_url : "");
+
+      - name: Download previous inventory artifact
+        if: steps.previous-artifact.outputs.url != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "${{ steps.previous-artifact.outputs.url }}" \
+            -o "${RUNNER_TEMP}/cloudflare-inventory.zip"
+          unzip -o "${RUNNER_TEMP}/cloudflare-inventory.zip" -d "${RUNNER_TEMP}/cloudflare-inventory"
+          previous_inventory="${RUNNER_TEMP}/cloudflare-inventory/cloudflare-inventory.json"
+          if [[ ! -f "${previous_inventory}" ]]; then
+            echo "previous inventory artifact missing expected cloudflare-inventory.json payload" >&2
+            exit 1
+          fi
+          cp "${previous_inventory}" "${PREVIOUS_INVENTORY_PATH}"
+
+      - name: Run Cloudflare delta scan
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          zones="${WORKFLOW_CLOUDFLARE_ZONES:-${SECRET_CLOUDFLARE_ZONES}}"
+          include="${WORKFLOW_CLOUDFLARE_INCLUDE:-${SECRET_CLOUDFLARE_INCLUDE}}"
+          exclude="${WORKFLOW_CLOUDFLARE_EXCLUDE:-${SECRET_CLOUDFLARE_EXCLUDE}}"
+          top_ports="${WORKFLOW_TOP_PORTS:-${SECRET_TOP_PORTS}}"
+
+          args=(
+            --cloudflare
+            --cloudflare-inventory-out "${INVENTORY_PATH}"
+            --cloudflare-diff-against "${PREVIOUS_INVENTORY_PATH}"
+            --cloudflare-delta-only
+          )
+          if [[ -n "${zones}" ]]; then
+            args+=(--cloudflare-zones "${zones}")
+          fi
+          if [[ -n "${include}" ]]; then
+            args+=(--cloudflare-include "${include}")
+          fi
+          if [[ -n "${exclude}" ]]; then
+            args+=(--cloudflare-exclude "${exclude}")
+          fi
+          if [[ -n "${top_ports}" ]]; then
+            args+=(--top-ports "${top_ports}")
+          fi
+
+          ./flan "${args[@]}"
+
+      - name: Upload latest inventory snapshot
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cloudflare-inventory-latest
+          path: ${{ env.INVENTORY_PATH }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload delta scan reports
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cloudflare-delta-reports-${{ github.run_id }}
+          path: ${{ env.REPORTS_DIR }}
+          if-no-files-found: warn
+          retention-days: 30

@@ -203,3 +203,53 @@ func TestIsTransientAPIValidationError(t *testing.T) {
 		t.Fatal("did not expect authorization failures to be transient")
 	}
 }
+
+func TestDisplaySecurityHeaderFindingsSuppressesInternalProbeNoise(t *testing.T) {
+	res := scanner.ScanResult{
+		Hostname: "internal-api.example.net",
+		Service:  "http",
+		Version:  "awselb/2.0",
+		SecurityHeaders: []scanner.HeaderFinding{
+			{Header: "HTTP Probe", Severity: "LOW", Detail: "header inspection failed: read tcp 1.2.3.4:123->5.6.7.8:443: read: connection reset by peer"},
+			{Header: "Content-Security-Policy", Severity: "MEDIUM", Detail: "missing CSP"},
+		},
+	}
+
+	findings := displaySecurityHeaderFindings(res)
+	if len(findings) != 1 {
+		t.Fatalf("expected one visible finding, got %d: %#v", len(findings), findings)
+	}
+	if findings[0].Header != "Content-Security-Policy" {
+		t.Fatalf("unexpected visible finding: %#v", findings[0])
+	}
+}
+
+func TestDisplaySecurityHeaderFindingsKeepsPublicProbeNoise(t *testing.T) {
+	res := scanner.ScanResult{
+		Hostname: "api.example.net",
+		Service:  "http",
+		SecurityHeaders: []scanner.HeaderFinding{
+			{Header: "HTTP Probe", Severity: "LOW", Detail: "header inspection failed: Get \"http://1.2.3.4:80/\": context deadline exceeded"},
+		},
+	}
+
+	findings := displaySecurityHeaderFindings(res)
+	if len(findings) != 1 {
+		t.Fatalf("expected public probe failure to remain visible, got %#v", findings)
+	}
+}
+
+func TestCloudflareOutputHostsUsesDeltaSelection(t *testing.T) {
+	allHosts := []string{"api.example.net", "admin.example.net"}
+	selectedHosts := []string{"api.example.net"}
+
+	got := cloudflareOutputHosts(allHosts, selectedHosts, true)
+	if !reflect.DeepEqual(got, selectedHosts) {
+		t.Fatalf("unexpected delta hosts: got %v want %v", got, selectedHosts)
+	}
+
+	got = cloudflareOutputHosts(allHosts, selectedHosts, false)
+	if !reflect.DeepEqual(got, allHosts) {
+		t.Fatalf("unexpected full hosts: got %v want %v", got, allHosts)
+	}
+}
