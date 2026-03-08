@@ -19,23 +19,8 @@ func WriteCloudflareInventory(outputDir string, explicitPath string, snapshot cf
 		}
 		path = filepath.Join(outputDir, fmt.Sprintf("cloudflare-inventory-%s.json", time.Now().Format("20060102-150405")))
 	}
-
-	dir := filepath.Dir(path)
-	if dir == "." && !strings.Contains(path, string(filepath.Separator)) {
-		dir = ""
-	}
-	if dir != "" {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return "", fmt.Errorf("create inventory directory: %w", err)
-		}
-	}
-
-	data, err := json.MarshalIndent(snapshot, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("marshal cloudflare inventory: %w", err)
-	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		return "", fmt.Errorf("write cloudflare inventory: %w", err)
+	if err := writeCloudflareJSON(path, snapshot); err != nil {
+		return "", err
 	}
 	return path, nil
 }
@@ -68,18 +53,36 @@ func WriteCloudflareInventoryDiff(outputDir string, inventoryPath string, diff c
 	if path == "" {
 		return "", nil
 	}
-	dir := filepath.Dir(path)
-	if dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return "", fmt.Errorf("create inventory diff directory: %w", err)
-		}
-	}
-	data, err := json.MarshalIndent(diff, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("marshal cloudflare inventory diff: %w", err)
-	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		return "", fmt.Errorf("write cloudflare inventory diff: %w", err)
+	if err := writeCloudflareJSON(path, diff); err != nil {
+		return "", err
 	}
 	return path, nil
+}
+
+func writeCloudflareJSON(path string, value any) error {
+	if err := ensureCloudflareOutputDir(path); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal cloudflare json: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return fmt.Errorf("write cloudflare json: %w", err)
+	}
+	return nil
+}
+
+func ensureCloudflareOutputDir(path string) error {
+	dir := filepath.Dir(path)
+	if dir == "." && !strings.Contains(path, string(filepath.Separator)) {
+		return nil
+	}
+	if dir == "" || dir == "." {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create cloudflare output directory: %w", err)
+	}
+	return nil
 }

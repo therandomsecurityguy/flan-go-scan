@@ -159,11 +159,11 @@ func (c *Client) Discover(ctx context.Context, opts DiscoverOptions) ([]Asset, e
 			if !ok {
 				continue
 			}
-			key := asset.Zone + "|" + asset.Hostname + "|" + asset.RecordType + "|" + asset.Value
-			if _, exists := seen[key]; exists {
+			identity := assetIdentity(asset)
+			if _, exists := seen[identity]; exists {
 				continue
 			}
-			seen[key] = struct{}{}
+			seen[identity] = struct{}{}
 			assets = append(assets, asset)
 		}
 	}
@@ -282,20 +282,10 @@ func Hostnames(assets []Asset) []string {
 }
 
 func BuildInventorySnapshot(now time.Time, assets []Asset, opts DiscoverOptions) InventorySnapshot {
-	zones := uniqueSortedValues(func() []string {
-		values := make([]string, 0, len(assets))
-		for _, asset := range assets {
-			if zone := normalizeHost(asset.Zone); zone != "" {
-				values = append(values, zone)
-			}
-		}
-		return values
-	}())
-
 	return InventorySnapshot{
 		GeneratedAt: now.UTC().Format(time.RFC3339),
 		Source:      "cloudflare",
-		Zones:       zones,
+		Zones:       zonesFromAssets(assets),
 		ZoneFilters: uniqueSortedValues(opts.Zones),
 		Include:     uniqueSortedValues(opts.Include),
 		Exclude:     uniqueSortedValues(opts.Exclude),
@@ -540,6 +530,16 @@ func uniqueSortedValues(values []string) []string {
 	}
 	sort.Strings(normalized)
 	return normalized
+}
+
+func zonesFromAssets(assets []Asset) []string {
+	values := make([]string, 0, len(assets))
+	for _, asset := range assets {
+		if zone := normalizeHost(asset.Zone); zone != "" {
+			values = append(values, zone)
+		}
+	}
+	return uniqueSortedValues(values)
 }
 
 func assetIdentity(asset Asset) string {
