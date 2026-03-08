@@ -58,6 +58,7 @@ func CheckPolicies(results []ScanResult, sc *ScanContext) []PolicyViolation {
 	}
 
 	var violations []PolicyViolation
+	seen := make(map[string]struct{})
 
 	for _, r := range results {
 		host := r.Host
@@ -65,7 +66,7 @@ func CheckPolicies(results []ScanResult, sc *ScanContext) []PolicyViolation {
 			host = r.Hostname
 		}
 		if len(sc.Policies.AllowedPorts) > 0 && !allowedSet[r.Port] {
-			violations = append(violations, PolicyViolation{
+			violations = appendUniqueViolation(violations, seen, PolicyViolation{
 				Host:     host,
 				Port:     r.Port,
 				Severity: "HIGH",
@@ -75,7 +76,7 @@ func CheckPolicies(results []ScanResult, sc *ScanContext) []PolicyViolation {
 
 		if r.TLS != nil && sc.Policies.TLSMinVersion != "" {
 			if v, ok := tlsOrder[r.TLS.Version]; ok && v < minRequired {
-				violations = append(violations, PolicyViolation{
+				violations = appendUniqueViolation(violations, seen, PolicyViolation{
 					Host:     host,
 					Port:     r.Port,
 					Severity: "HIGH",
@@ -87,7 +88,7 @@ func CheckPolicies(results []ScanResult, sc *ScanContext) []PolicyViolation {
 		if sc.Policies.SSHPasswordAuth != nil && !*sc.Policies.SSHPasswordAuth {
 			if strings.EqualFold(r.Service, "ssh") && r.Metadata != nil {
 				if strings.Contains(string(r.Metadata), `"passwordAuthEnabled":true`) {
-					violations = append(violations, PolicyViolation{
+					violations = appendUniqueViolation(violations, seen, PolicyViolation{
 						Host:     host,
 						Port:     r.Port,
 						Severity: "CRITICAL",
@@ -99,6 +100,15 @@ func CheckPolicies(results []ScanResult, sc *ScanContext) []PolicyViolation {
 	}
 
 	return violations
+}
+
+func appendUniqueViolation(violations []PolicyViolation, seen map[string]struct{}, violation PolicyViolation) []PolicyViolation {
+	key := fmt.Sprintf("%s|%d|%s|%s", violation.Host, violation.Port, violation.Severity, violation.Detail)
+	if _, exists := seen[key]; exists {
+		return violations
+	}
+	seen[key] = struct{}{}
+	return append(violations, violation)
 }
 
 func BuildContextSummary(sc *ScanContext) string {

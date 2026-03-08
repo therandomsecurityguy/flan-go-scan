@@ -1095,12 +1095,13 @@ func printResult(res scanner.ScanResult) {
 
 	if scanner.IsHTTPService(res.Service, res.Port, res.TLS != nil) {
 		eligible, statusCode := headerInspectionEligible(res)
+		displayFindings := displaySecurityHeaderFindings(res)
 		if !eligible {
 			fmt.Printf("  %s~  security headers skipped on HTTP status %d%s\n", dim, statusCode, reset)
-		} else if len(res.SecurityHeaders) == 0 {
+		} else if len(displayFindings) == 0 {
 			fmt.Printf("  %s✓  security headers OK%s\n", green, reset)
 		} else {
-			for _, f := range res.SecurityHeaders {
+			for _, f := range displayFindings {
 				color := yellow
 				if f.Severity == "HIGH" {
 					color = red
@@ -1636,6 +1637,35 @@ func headerInspectionEligible(res scanner.ScanResult) (bool, int) {
 		return true, meta.StatusCode
 	}
 	return false, meta.StatusCode
+}
+
+func displaySecurityHeaderFindings(res scanner.ScanResult) []scanner.HeaderFinding {
+	findings := make([]scanner.HeaderFinding, 0, len(res.SecurityHeaders))
+	for _, finding := range res.SecurityHeaders {
+		if suppressPrettyHeaderFinding(res, finding) {
+			continue
+		}
+		findings = append(findings, finding)
+	}
+	return findings
+}
+
+func suppressPrettyHeaderFinding(res scanner.ScanResult, finding scanner.HeaderFinding) bool {
+	if finding.Header != "HTTP Probe" || !strings.EqualFold(finding.Severity, "LOW") {
+		return false
+	}
+
+	host := strings.ToLower(strings.TrimSpace(res.Hostname))
+	version := strings.ToLower(strings.TrimSpace(res.Version))
+	detail := strings.ToLower(finding.Detail)
+
+	if strings.Contains(host, ".internal.") || strings.HasPrefix(version, "awselb/") {
+		return strings.Contains(detail, "connection reset") ||
+			strings.Contains(detail, "context deadline exceeded") ||
+			strings.Contains(detail, "client.timeout exceeded")
+	}
+
+	return false
 }
 
 func pick(set map[string]bool, long string, longVal *string, short string, shortVal *string, def string) string {
