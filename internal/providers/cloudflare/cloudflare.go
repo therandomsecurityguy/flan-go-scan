@@ -9,11 +9,13 @@ import (
 	"net/url"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const defaultBaseURL = "https://api.cloudflare.com/client/v4"
+const maxHTTPAttempts = 3
 
 type Client struct {
 	token      string
@@ -95,6 +97,19 @@ type apiEnvelope[T any] struct {
 		TotalPages int `json:"total_pages"`
 		TotalCount int `json:"total_count"`
 	} `json:"result_info"`
+}
+
+type apiEnvelopeChecker interface {
+	success() bool
+	errorMessage() string
+}
+
+func (e *apiEnvelope[T]) success() bool {
+	return e.Success
+}
+
+func (e *apiEnvelope[T]) errorMessage() string {
+	return joinErrors(e.Errors)
 }
 
 func NewClient(token string, timeout time.Duration) (*Client, error) {
@@ -367,38 +382,43 @@ func (c *Client) get(ctx context.Context, endpoint string, query url.Values, dst
 		u.RawQuery = query.Encode()
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("unexpected status: %s", resp.Status)
-	}
-	if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
-		return fmt.Errorf("decode response: %w", err)
-	}
-
-	switch v := dst.(type) {
-	case *apiEnvelope[Zone]:
-		if !v.Success {
-			return fmt.Errorf("cloudflare api error: %s", joinErrors(v.Errors))
+	for attempt := 0; attempt < maxHTTPAttempts; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+		if err != nil {
+			return fmt.Errorf("build request: %w", err)
 		}
-	case *apiEnvelope[DNSRecord]:
-		if !v.Success {
-			return fmt.Errorf("cloudflare api error: %s", joinErrors(v.Errors))
+		req.Header.Set("Authorization", "Bearer "+c.token)
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("send request: %w", err)
 		}
+
+		if resp.StatusCode == http.StatusTooManyRequests && attempt+1 < maxHTTPAttempts {
+			delay := retryDelay(resp.Header.Get("Retry-After"), attempt)
+			resp.Body.Close()
+			if err := waitForRetry(ctx, delay); err != nil {
+				return err
+			}
+			continue
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			resp.Body.Close()
+			return fmt.Errorf("unexpected status: %s", resp.Status)
+		}
+		if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
+			resp.Body.Close()
+			return fmt.Errorf("decode response: %w", err)
+		}
+		resp.Body.Close()
+		if env, ok := dst.(apiEnvelopeChecker); ok && !env.success() {
+			return fmt.Errorf("cloudflare api error: %s", env.errorMessage())
+		}
+		return nil
 	}
 
-	return nil
+	return fmt.Errorf("cloudflare request failed after retries")
 }
 
 func joinErrors(errs []struct {
@@ -506,12 +526,36 @@ func isPublicIP(value string) bool {
 	if ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 		return false
 	}
-	if ip4 := ip.To4(); ip4 != nil {
-		if ip4[0] == 0 || (ip4[0] == 169 && ip4[1] == 254) {
-			return false
-		}
+	if ip4 := ip.To4(); ip4 != nil && ip4[0] == 0 {
+		return false
 	}
 	return true
+}
+
+func retryDelay(value string, attempt int) time.Duration {
+	retryAfter := strings.TrimSpace(value)
+	if retryAfter != "" {
+		if seconds, err := strconv.Atoi(retryAfter); err == nil && seconds > 0 {
+			return time.Duration(seconds) * time.Second
+		}
+		if when, err := http.ParseTime(retryAfter); err == nil {
+			if delay := time.Until(when); delay > 0 {
+				return delay
+			}
+		}
+	}
+	return time.Duration(attempt+1) * time.Second
+}
+
+func waitForRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func uniqueSortedValues(values []string) []string {

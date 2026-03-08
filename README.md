@@ -205,7 +205,7 @@ Header inspection behavior: security-header findings are generated for HTTP `2xx
 DNS resolution behavior: Flan uses a deterministic resolver chain (custom resolver when provided, otherwise system resolver, then configured fallbacks) and records resolver/cache stats in scan metadata.
 
 Cloudflare discovery behavior: Flan uses zones as the discovery boundary, keeps `A`, `AAAA`, and `CNAME` scan candidates, and skips validation, wildcard, and non-public-IP records by default.
-When Cloudflare discovery is enabled, Flan can also persist a normalized inventory snapshot, compare it against a prior snapshot, and optionally narrow scans to added/changed hosts for scheduled delta workflows.
+When Cloudflare discovery is enabled, Flan can also persist a normalized inventory snapshot, compare it against a prior snapshot, and optionally narrow scans to added/changed hosts for scheduled delta workflows. If `--cloudflare-diff-against` is omitted but `--cloudflare-inventory-out` is set, Flan reuses the inventory output path as the diff base.
 
 For GitHub Actions automation, set the repository secret `CLOUDFLARE_API_TOKEN`. If you do not want Cloudflare scope in plaintext repo settings, either pass zones/include/exclude as manual workflow inputs or store them in secrets named `CLOUDFLARE_ZONES`, `CLOUDFLARE_INCLUDE`, `CLOUDFLARE_EXCLUDE`, and `CLOUDFLARE_TOP_PORTS`.
 
@@ -250,7 +250,7 @@ cloudflare:
 | `--cloudflare-include` | Comma-separated hostname include filters |
 | `--cloudflare-exclude` | Comma-separated hostname exclude filters |
 | `--cloudflare-inventory-out` | Write normalized Cloudflare inventory snapshot to this path |
-| `--cloudflare-diff-against` | Compare the current Cloudflare inventory against a previous snapshot |
+| `--cloudflare-diff-against` | Compare the current Cloudflare inventory against a previous snapshot; defaults to `--cloudflare-inventory-out` when omitted |
 | `--cloudflare-delta-only` | Scan only added/changed Cloudflare hosts when a previous snapshot is available |
 | `--passive-only` | Skip brute-force, use passive sources only |
 | `--subdomains-only` | Print discovered subdomains and exit (no port scan) |

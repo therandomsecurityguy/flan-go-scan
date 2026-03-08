@@ -90,9 +90,6 @@ func defaults() *Config {
 	cfg.Output.Directory = "-"
 	cfg.Checkpoint.File = "scan-state.json"
 	cfg.Cloudflare.Enabled = false
-	cfg.Cloudflare.Zones = nil
-	cfg.Cloudflare.Include = nil
-	cfg.Cloudflare.Exclude = nil
 	cfg.Cloudflare.TokenEnv = "CLOUDFLARE_API_TOKEN"
 	cfg.Cloudflare.Timeout = 15 * time.Second
 	cfg.Cloudflare.InventoryOut = ""

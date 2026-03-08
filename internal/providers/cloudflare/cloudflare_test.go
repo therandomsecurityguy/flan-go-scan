@@ -272,6 +272,56 @@ func TestGetIncludesQuery(t *testing.T) {
 	}
 }
 
+func TestGetRetriesRateLimit(t *testing.T) {
+	attempts := 0
+	client, err := NewClientForTesting("token", "https://example.test", newMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			return rateLimitedResponse("0"), nil
+		}
+		return jsonResponse(t, map[string]any{
+			"success":     true,
+			"result":      []map[string]any{},
+			"result_info": map[string]any{"page": 1, "per_page": 50, "count": 0, "total_pages": 1, "total_count": 0},
+		}), nil
+	}))
+	if err != nil {
+		t.Fatalf("NewClientForTesting returned error: %v", err)
+	}
+
+	_, err = client.ListZones(context.Background(), DiscoverOptions{})
+	if err != nil {
+		t.Fatalf("ListZones returned error: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("expected 2 attempts, got %d", attempts)
+	}
+}
+
+func TestGetReturnsAPIErrorOnSuccessFalse(t *testing.T) {
+	client, err := NewClientForTesting("token", "https://example.test", newMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(t, map[string]any{
+			"success": false,
+			"errors": []map[string]any{
+				{"message": "token is invalid"},
+			},
+			"result":      []map[string]any{},
+			"result_info": map[string]any{"page": 1, "per_page": 50, "count": 0, "total_pages": 1, "total_count": 0},
+		}), nil
+	}))
+	if err != nil {
+		t.Fatalf("NewClientForTesting returned error: %v", err)
+	}
+
+	_, err = client.ListZones(context.Background(), DiscoverOptions{})
+	if err == nil {
+		t.Fatal("expected ListZones to return an error")
+	}
+	if !strings.Contains(err.Error(), "token is invalid") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -294,5 +344,16 @@ func jsonResponse(t *testing.T, body map[string]any) *http.Response {
 		Status:     "200 OK",
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       io.NopCloser(buf),
+	}
+}
+
+func rateLimitedResponse(retryAfter string) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Status:     "429 Too Many Requests",
+		Header: http.Header{
+			"Retry-After": []string{retryAfter},
+		},
+		Body: io.NopCloser(strings.NewReader("rate limited")),
 	}
 }

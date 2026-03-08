@@ -75,9 +75,6 @@ func writeCloudflareJSON(path string, value any) error {
 
 func ensureCloudflareOutputDir(path string) error {
 	dir := filepath.Dir(path)
-	if dir == "." && !strings.Contains(path, string(filepath.Separator)) {
-		return nil
-	}
 	if dir == "" || dir == "." {
 		return nil
 	}

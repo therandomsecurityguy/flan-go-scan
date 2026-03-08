@@ -63,7 +63,7 @@ CONFIGURATION:
   --cloudflare-include string comma-separated hostname include filters
   --cloudflare-exclude string comma-separated hostname exclude filters
   --cloudflare-inventory-out string write normalized Cloudflare inventory snapshot to this path
-  --cloudflare-diff-against string compare the current Cloudflare inventory against a previous snapshot
+  --cloudflare-diff-against string compare the current Cloudflare inventory against a previous snapshot (defaults to --cloudflare-inventory-out when omitted)
   --cloudflare-delta-only scan only added/changed Cloudflare hosts when a previous snapshot is available
   --passive-only           skip brute-force, use passive sources only
   --subdomains-only        print discovered subdomains and exit (subfinder-style)
@@ -418,6 +418,7 @@ func main() {
 		deltaOnly := cfg.Cloudflare.DeltaOnly || *cloudflareDeltaOnly
 		if diffAgainst == "" && inventoryOut != "" {
 			diffAgainst = inventoryOut
+			slog.Info("cloudflare inventory diff base defaults to inventory output", "path", diffAgainst)
 		}
 		if diffAgainst != "" {
 			previous, err := output.ReadCloudflareInventory(diffAgainst)
