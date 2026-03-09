@@ -1,49 +1,70 @@
 name: CI
 
 on:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  go-ci:
+  verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.5.0
         with:
           go-version-file: go.mod
           cache: true
 
-      - name: gofmt check
-        shell: bash
+      - name: Check formatting
         run: |
-          files="$(find . -name '*.go' -not -path './vendor/*' -print0 | xargs -0 gofmt -l)"
-          if [[ -n "${files}" ]]; then
-            echo "These files are not gofmt-formatted:"
-            echo "${files}"
+          files="$(git ls-files '*.go')"
+          if [[ -z "${files}" ]]; then
+            exit 0
+          fi
+          unformatted="$(gofmt -l ${files})"
+          if [[ -n "${unformatted}" ]]; then
+            echo "${unformatted}"
             exit 1
           fi
 
-      - name: go test ./...
+      - name: Run tests
         run: go test ./...
 
-      - name: go test -race ./...
+      - name: Run race tests
         run: go test -race ./...
 
-      - name: go test ./... -cover
-        run: go test ./... -cover
+      - name: Collect coverage
+        run: go test ./... -coverprofile=coverage.out
 
-      - name: go vet ./...
+      - name: Report coverage
+        run: go tool cover -func=coverage.out
+
+      - name: Run vet
         run: go vet ./...
 
-      - name: go build -o flan ./cmd/flan
-        run: go build -o flan ./cmd/flan
+      - name: Build flan
+        run: go build -trimpath -o flan ./cmd/flan
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-${{ github.run_id }}
+          path: coverage.out
+          if-no-files-found: error
+          retention-days: 14

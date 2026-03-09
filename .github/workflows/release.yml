@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build release archives
+        run: |
+          set -euo pipefail
+
+          version="${GITHUB_REF_NAME}"
+          mkdir -p dist
+
+          for target in \
+            "linux amd64 tar.gz" \
+            "linux arm64 tar.gz"
+          do
+            read -r goos goarch archive <<<"${target}"
+            package="flan_${version}_${goos}_${goarch}"
+            stage="dist/${package}"
+
+            mkdir -p "${stage}"
+            CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" \
+              go build -trimpath -ldflags="-s -w -X main.version=${version}" -o "${stage}/flan" ./cmd/flan
+            cp README.md LICENSE "${stage}/"
+
+            tar -C dist -czf "dist/${package}.tar.gz" "${package}"
+
+            rm -rf "${stage}"
+          done
+
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum ./* > checksums.txt)
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-${{ github.ref_name }}
+          path: dist
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          version="${GITHUB_REF_NAME}"
+          if gh release view "${version}" >/dev/null 2>&1; then
+            gh release upload "${version}" dist/* --clobber
+          else
+            gh release create "${version}" dist/* --verify-tag --generate-notes
+          fi

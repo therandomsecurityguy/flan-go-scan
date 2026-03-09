@@ -1,8 +1,17 @@
-name: Auto Tag
+name: Tag Release
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semver tag to create (for example v0.12.0)
+        required: true
+        type: string
+      target_ref:
+        description: Branch or commit to tag
+        required: false
+        default: main
+        type: string
 
 permissions:
   contents: write
@@ -10,28 +19,32 @@ permissions:
 jobs:
   tag:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          ref: ${{ inputs.target_ref }}
 
-      - name: Get latest tag
-        id: latest
+      - name: Validate version
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          tag=$(git tag -l 'v*' --sort=-v:refname | head -1)
-          echo "tag=${tag:-v0.0.0}" >> "$GITHUB_OUTPUT"
+          if [[ ! "${VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "version must match vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          if git rev-parse "refs/tags/${VERSION}" >/dev/null 2>&1; then
+            echo "tag ${VERSION} already exists" >&2
+            exit 1
+          fi
 
-      - name: Bump patch version
-        id: bump
+      - name: Create annotated tag
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          current="${{ steps.latest.outputs.tag }}"
-          major=$(echo "$current" | cut -d. -f1)
-          minor=$(echo "$current" | cut -d. -f2)
-          patch=$(echo "$current" | cut -d. -f3)
-          new="${major}.${minor}.$((patch + 1))"
-          echo "tag=${new}" >> "$GITHUB_OUTPUT"
-
-      - name: Create tag
-        run: |
-          git tag "${{ steps.bump.outputs.tag }}"
-          git push origin "${{ steps.bump.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${VERSION}" -m "Release ${VERSION}"
+          git push origin "${VERSION}"
