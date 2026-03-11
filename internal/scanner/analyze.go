@@ -27,6 +27,8 @@ type AnalysisUsage struct {
 	TotalTokens      int64 `json:"total_tokens"`
 }
 
+const TogetherModel = "Qwen/Qwen3.5-9B"
+
 const briefSystemPrompt = `You are a security expert. Summarize the scan results in 5-7 bullet points:
 - Lead with critical/high severity findings; include a one-line remediation for each
 - Cover medium severity issues (missing headers, weak TLS, exposed admin interfaces, version disclosure)
@@ -88,7 +90,7 @@ func Analyze(ctx context.Context, results []ScanResult, outputDir string, sc *Sc
 	slog.Info("sending scan results to Together AI for analysis", "services", len(results))
 
 	resp, err := client.Chat.Completions.New(ctx, together.ChatCompletionNewParams{
-		Model: "deepseek-ai/DeepSeek-V3.1",
+		Model: TogetherModel,
 		Messages: []together.ChatCompletionNewParamsMessageUnion{
 			{
 				OfChatCompletionNewsMessageChatCompletionSystemMessageParam: &together.ChatCompletionNewParamsMessageChatCompletionSystemMessageParam{
@@ -118,7 +120,7 @@ func Analyze(ctx context.Context, results []ScanResult, outputDir string, sc *Sc
 
 	analysis := &AnalysisResult{
 		Timestamp: time.Now().Format(time.RFC3339),
-		Model:     "deepseek-ai/DeepSeek-V3.1",
+		Model:     TogetherModel,
 		Analysis:  resp.Choices[0].Message.Content,
 	}
 
@@ -160,7 +162,7 @@ func AnalyzeBrief(ctx context.Context, results []ScanResult, sc *ScanContext) (s
 	}
 
 	resp, err := client.Chat.Completions.New(ctx, together.ChatCompletionNewParams{
-		Model: "deepseek-ai/DeepSeek-V3.1",
+		Model: TogetherModel,
 		Messages: []together.ChatCompletionNewParamsMessageUnion{
 			{
 				OfChatCompletionNewsMessageChatCompletionSystemMessageParam: &together.ChatCompletionNewParamsMessageChatCompletionSystemMessageParam{

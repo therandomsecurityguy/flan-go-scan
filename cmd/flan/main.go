@@ -957,7 +957,7 @@ func main() {
 			fmt.Println()
 			fmt.Printf("\033[2m  ──────────────\033[0m \033[1m\033[36mAI Analysis\033[0m \033[2m──────────────\033[0m\n\n")
 			printAnalysis(brief)
-			fmt.Println("\033[2m  Powered by Together AI (deepseek-ai/DeepSeek-V3.1)\033[0m")
+			fmt.Printf("\033[2m  Powered by Together AI (%s)\033[0m\n", scanner.TogetherModel)
 			fmt.Println()
 		}
 	}
@@ -970,7 +970,7 @@ func main() {
 			fmt.Println()
 			fmt.Printf("\033[2m  ──────────────\033[0m \033[1m\033[36mAI Analysis\033[0m \033[2m──────────────\033[0m\n\n")
 			printAnalysis(analysis.Analysis)
-			fmt.Println("\033[2m  Powered by Together AI (deepseek-ai/DeepSeek-V3.1)\033[0m")
+			fmt.Printf("\033[2m  Powered by Together AI (%s)\033[0m\n", scanner.TogetherModel)
 			fmt.Println()
 		}
 	}
