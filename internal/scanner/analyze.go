@@ -117,11 +117,15 @@ func Analyze(ctx context.Context, results []ScanResult, outputDir string, sc *Sc
 	if len(resp.Choices) == 0 {
 		return nil, fmt.Errorf("no response from model")
 	}
+	content := choiceContent(resp.Choices[0])
+	if content == "" {
+		return nil, fmt.Errorf("empty response from model")
+	}
 
 	analysis := &AnalysisResult{
 		Timestamp: time.Now().Format(time.RFC3339),
 		Model:     TogetherModel,
-		Analysis:  resp.Choices[0].Message.Content,
+		Analysis:  content,
 	}
 
 	if resp.Usage.TotalTokens > 0 {
@@ -189,8 +193,24 @@ func AnalyzeBrief(ctx context.Context, results []ScanResult, sc *ScanContext) (s
 	if len(resp.Choices) == 0 {
 		return "", fmt.Errorf("no response from model")
 	}
+	content := choiceContent(resp.Choices[0])
+	if content == "" {
+		return "", fmt.Errorf("empty response from model")
+	}
+	return content, nil
+}
 
-	return resp.Choices[0].Message.Content, nil
+func choiceContent(choice together.ChatCompletionChoice) string {
+	if text := strings.TrimSpace(choice.Message.Content); text != "" {
+		return text
+	}
+	if text := strings.TrimSpace(choice.Text); text != "" {
+		return text
+	}
+	if text := strings.TrimSpace(choice.Message.Reasoning); text != "" {
+		return text
+	}
+	return ""
 }
 
 func buildSummary(results []ScanResult) string {

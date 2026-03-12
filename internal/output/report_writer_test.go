@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	awsprovider "github.com/therandomsecurityguy/flan-go-scan/internal/providers/aws"
 	cfprovider "github.com/therandomsecurityguy/flan-go-scan/internal/providers/cloudflare"
 	"github.com/therandomsecurityguy/flan-go-scan/internal/scanner"
 )
@@ -205,5 +206,69 @@ func TestWriteCloudflareInventoryDiff(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("expected diff file: %v", err)
+	}
+}
+
+func TestWriteAWSInventoryUsesOutputDir(t *testing.T) {
+	dir := t.TempDir()
+	path, err := WriteAWSInventory(dir, "", awsprovider.InventorySnapshot{
+		GeneratedAt: "2026-03-11T00:00:00Z",
+		Source:      "aws",
+		AssetCount:  1,
+		Assets: []awsprovider.Asset{
+			{AccountID: "123456789012", Region: "us-west-2", Service: "ec2", AssetType: "instance", ResourceID: "i-1", Target: "api.example.net", Public: true, Source: "aws"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("WriteAWSInventory failed: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read aws inventory: %v", err)
+	}
+	var snapshot awsprovider.InventorySnapshot
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		t.Fatalf("unmarshal aws inventory: %v", err)
+	}
+	if snapshot.AssetCount != 1 || len(snapshot.Assets) != 1 {
+		t.Fatalf("unexpected aws inventory: %#v", snapshot)
+	}
+}
+
+func TestReadAWSInventoryAndDiff(t *testing.T) {
+	dir := t.TempDir()
+	inventoryPath := filepath.Join(dir, "aws.json")
+	expected := awsprovider.InventorySnapshot{
+		GeneratedAt: "2026-03-11T00:00:00Z",
+		Source:      "aws",
+		AssetCount:  1,
+		Assets: []awsprovider.Asset{
+			{AccountID: "123456789012", Region: "us-west-2", Service: "ec2", AssetType: "instance", ResourceID: "i-1", Target: "api.example.net", Public: true, Source: "aws"},
+		},
+	}
+	if _, err := WriteAWSInventory("", inventoryPath, expected); err != nil {
+		t.Fatalf("WriteAWSInventory failed: %v", err)
+	}
+	got, err := ReadAWSInventory(inventoryPath)
+	if err != nil {
+		t.Fatalf("ReadAWSInventory failed: %v", err)
+	}
+	if got.AssetCount != expected.AssetCount || len(got.Assets) != len(expected.Assets) {
+		t.Fatalf("unexpected aws inventory readback: %#v", got)
+	}
+
+	diffPath, err := WriteAWSInventoryDiff("", inventoryPath, awsprovider.InventoryDiff{
+		GeneratedAt: "2026-03-11T01:00:00Z",
+		Source:      "aws",
+		AddedCount:  1,
+	})
+	if err != nil {
+		t.Fatalf("WriteAWSInventoryDiff failed: %v", err)
+	}
+	if diffPath != filepath.Join(dir, "aws-diff.json") {
+		t.Fatalf("unexpected aws diff path: %s", diffPath)
+	}
+	if _, err := os.Stat(diffPath); err != nil {
+		t.Fatalf("expected aws diff file: %v", err)
 	}
 }

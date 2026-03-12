@@ -58,6 +58,21 @@ func TestLoadConfigMissingFileUsesDefaults(t *testing.T) {
 	if cfg.Cloudflare.DeltaOnly {
 		t.Fatal("unexpected default cloudflare delta_only to be true")
 	}
+	if cfg.AWS.Profile != "" {
+		t.Fatalf("unexpected default aws profile: %q", cfg.AWS.Profile)
+	}
+	if cfg.AWS.Timeout != 15*time.Second {
+		t.Fatalf("unexpected default aws timeout: %v", cfg.AWS.Timeout)
+	}
+	if cfg.AWS.InventoryOut != "" {
+		t.Fatalf("unexpected default aws inventory out: %q", cfg.AWS.InventoryOut)
+	}
+	if cfg.AWS.DiffAgainst != "" {
+		t.Fatalf("unexpected default aws diff_against: %q", cfg.AWS.DiffAgainst)
+	}
+	if cfg.AWS.DeltaOnly {
+		t.Fatal("unexpected default aws delta_only to be true")
+	}
 }
 
 func TestLoadConfigFromFileOverridesDefaults(t *testing.T) {
@@ -94,6 +109,19 @@ cloudflare:
   timeout: 11s
   inventory_out: ./reports/cloudflare.json
   diff_against: ./reports/cloudflare-prev.json
+  delta_only: true
+aws:
+  enabled: true
+  profile: example-profile
+  regions:
+    - us-west-2
+  include:
+    - "*.example.net"
+  exclude:
+    - "internal.example.net"
+  timeout: 12s
+  inventory_out: ./reports/aws.json
+  diff_against: ./reports/aws-prev.json
   delta_only: true
 `
 	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
@@ -172,5 +200,32 @@ cloudflare:
 	}
 	if !cfg.Cloudflare.DeltaOnly {
 		t.Fatal("expected cloudflare delta_only override to be true")
+	}
+	if !cfg.AWS.Enabled {
+		t.Fatal("expected aws enabled override to be true")
+	}
+	if cfg.AWS.Profile != "example-profile" {
+		t.Fatalf("unexpected aws profile override: %s", cfg.AWS.Profile)
+	}
+	if len(cfg.AWS.Regions) != 1 || cfg.AWS.Regions[0] != "us-west-2" {
+		t.Fatalf("unexpected aws regions override: %v", cfg.AWS.Regions)
+	}
+	if len(cfg.AWS.Include) != 1 || cfg.AWS.Include[0] != "*.example.net" {
+		t.Fatalf("unexpected aws include override: %v", cfg.AWS.Include)
+	}
+	if len(cfg.AWS.Exclude) != 1 || cfg.AWS.Exclude[0] != "internal.example.net" {
+		t.Fatalf("unexpected aws exclude override: %v", cfg.AWS.Exclude)
+	}
+	if cfg.AWS.Timeout != 12*time.Second {
+		t.Fatalf("unexpected aws timeout override: %v", cfg.AWS.Timeout)
+	}
+	if cfg.AWS.InventoryOut != "./reports/aws.json" {
+		t.Fatalf("unexpected aws inventory_out override: %s", cfg.AWS.InventoryOut)
+	}
+	if cfg.AWS.DiffAgainst != "./reports/aws-prev.json" {
+		t.Fatalf("unexpected aws diff_against override: %s", cfg.AWS.DiffAgainst)
+	}
+	if !cfg.AWS.DeltaOnly {
+		t.Fatal("expected aws delta_only override to be true")
 	}
 }

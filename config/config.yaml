@@ -43,3 +43,13 @@ cloudflare:
   inventory_out: ""
   diff_against: ""
   delta_only: false
+aws:
+  enabled: false
+  profile: ""
+  regions: []
+  include: []
+  exclude: []
+  timeout: 15s
+  inventory_out: ""
+  diff_against: ""
+  delta_only: false

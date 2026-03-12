@@ -6,7 +6,7 @@
 [![License: BSD 3-Clause](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](LICENSE)
 [![CI](https://github.com/therandomsecurityguy/flan-go-scan/actions/workflows/ci.yml/badge.svg)](https://github.com/therandomsecurityguy/flan-go-scan/actions/workflows/ci.yml)
 
-A swiss-army scanner in Go. Successor to [Flan Scan](https://github.com/cloudflare/flan).
+Flan is a Swiss army knife network scanner in Go. Successor to [Flan Scan](https://github.com/cloudflare/flan).
 
 ## Features
 
@@ -21,6 +21,7 @@ A swiss-army scanner in Go. Successor to [Flan Scan](https://github.com/cloudfla
 - CDN detection (Cloudflare) — limits scan to ports 80/443 by default on CDN hosts
 - DNS enumeration with wildcard detection and custom wordlist/resolver support
 - Cloudflare zone-based target discovery via `CLOUDFLARE_API_TOKEN`
+- AWS asset discovery via the standard AWS SDK credential chain or `--aws-profile`
 - NS, MX, TXT, CNAME record lookups
 - CIDR and stdin input support
 - nmap top 100/1000 port lists with expanded 2000/5000 presets
@@ -31,7 +32,7 @@ A swiss-army scanner in Go. Successor to [Flan Scan](https://github.com/cloudfla
 - Web crawler with app fingerprinting via `--crawl` (path, header, and cookie-based detection for 60+ CMSes, frameworks, and admin tools)
 - Context-aware rate limiting and TLS inspection — clean shutdown on Ctrl+C
 - Graceful shutdown on SIGINT/SIGTERM
-- AI-powered security analysis via [Together API](https://together.ai) (DeepSeek V3.1) — brief summary on every scan, detailed report with `--analyze`
+- AI-powered security analysis via [Together API](https://together.ai) (`Qwen/Qwen3.5-9B`) — brief summary on every scan, detailed report with `--analyze`
 - Pretty streaming CLI output with TTY detection (JSONL when piping)
 - Per-run scan metadata report (`scan-metadata-*.json`) for auditability
 - JSON, JSONL (streaming), CSV, and text output
@@ -150,6 +151,30 @@ Print Cloudflare-discovered hostnames only:
 flan --cloudflare --cloudflare-zones example.net --cloudflare-include "api.example.net" --subdomains-only
 ```
 
+Discover scan targets from AWS:
+
+```
+AWS_PROFILE=<profile> flan --aws --aws-regions us-west-2
+```
+
+Print AWS-discovered targets only:
+
+```
+AWS_PROFILE=<profile> flan --aws --aws-regions us-west-2 --subdomains-only
+```
+
+Write a normalized AWS inventory snapshot for later diffing:
+
+```
+AWS_PROFILE=<profile> flan --aws --aws-regions us-west-2 --aws-inventory-out reports/aws-inventory.json
+```
+
+Scan only added or changed AWS targets when a previous snapshot exists:
+
+```
+AWS_PROFILE=<profile> flan --aws --aws-regions us-west-2 --aws-inventory-out reports/aws-inventory.json --aws-delta-only
+```
+
 Write a normalized Cloudflare inventory snapshot for later diffing:
 
 ```
@@ -208,11 +233,13 @@ Flan uses a deterministic resolver chain: custom resolver when provided, otherwi
 
 Cloudflare discovery uses zones as the discovery boundary. It keeps `A`, `AAAA`, and `CNAME` scan candidates and skips validation, wildcard, and non-public-IP records by default. It can persist a normalized inventory snapshot, compare it against a prior snapshot, and optionally narrow scans to added or changed hosts for scheduled delta workflows. If `--cloudflare-diff-against` is omitted but `--cloudflare-inventory-out` is set, Flan reuses the inventory output path as the diff base.
 
+AWS discovery is inventory-first. It collects public scan targets from `Route53`, `EC2`, `ELB/ELBv2`, `CloudFront`, `API Gateway`, `Lightsail`, `EKS`, `Lambda` function URLs, and S3 website endpoints. It can persist a normalized inventory snapshot, compare it against a prior snapshot, and optionally narrow scans to added or changed targets. If `--aws-diff-against` is omitted but `--aws-inventory-out` is set, Flan reuses the inventory output path as the diff base.
+
 For GitHub Actions automation, set the repository secret `CLOUDFLARE_API_TOKEN`. To avoid putting Cloudflare scope in plaintext repo settings, pass zones, include, and exclude filters as manual workflow inputs or store them in secrets named `CLOUDFLARE_ZONES`, `CLOUDFLARE_INCLUDE`, `CLOUDFLARE_EXCLUDE`, and `CLOUDFLARE_TOP_PORTS`.
 
 ## Config Defaults
 
-Guardrails, DNS policy, and Cloudflare discovery settings are configurable in `config/config.yaml`:
+Guardrails, DNS policy, Cloudflare discovery, and AWS discovery settings are configurable in `config/config.yaml`:
 
 ```yaml
 scan:
@@ -229,6 +256,16 @@ cloudflare:
   include: []
   exclude: []
   token_env: CLOUDFLARE_API_TOKEN
+  timeout: 15s
+  inventory_out: ""
+  diff_against: ""
+  delta_only: false
+aws:
+  enabled: false
+  profile: ""
+  regions: []
+  include: []
+  exclude: []
   timeout: 15s
   inventory_out: ""
   diff_against: ""
@@ -255,6 +292,14 @@ cloudflare:
 | `--cloudflare-inventory-out` | Write normalized Cloudflare inventory snapshot to this path |
 | `--cloudflare-diff-against` | Compare the current Cloudflare inventory against a previous snapshot; defaults to `--cloudflare-inventory-out` when omitted |
 | `--cloudflare-delta-only` | Scan only added/changed Cloudflare hosts when a previous snapshot is available |
+| `--aws` | Discover scan targets from AWS assets |
+| `--aws-profile` | AWS shared config profile to use |
+| `--aws-regions` | Comma-separated AWS region filter |
+| `--aws-include` | Comma-separated AWS target include filters |
+| `--aws-exclude` | Comma-separated AWS target exclude filters |
+| `--aws-inventory-out` | Write normalized AWS inventory snapshot to this path |
+| `--aws-diff-against` | Compare the current AWS inventory against a previous snapshot; defaults to `--aws-inventory-out` when omitted |
+| `--aws-delta-only` | Scan only added/changed AWS targets when a previous snapshot is available |
 | `--passive-only` | Skip brute-force, use passive sources only |
 | `--subdomains-only` | Print discovered subdomains and exit (no port scan) |
 | `--subfinder-sources` | Comma-separated passive sources override |
