@@ -57,6 +57,17 @@ type Config struct {
 		DiffAgainst  string        `mapstructure:"diff_against"`
 		DeltaOnly    bool          `mapstructure:"delta_only"`
 	} `mapstructure:"cloudflare"`
+	AWS struct {
+		Enabled      bool          `mapstructure:"enabled"`
+		Profile      string        `mapstructure:"profile"`
+		Regions      []string      `mapstructure:"regions"`
+		Include      []string      `mapstructure:"include"`
+		Exclude      []string      `mapstructure:"exclude"`
+		Timeout      time.Duration `mapstructure:"timeout"`
+		InventoryOut string        `mapstructure:"inventory_out"`
+		DiffAgainst  string        `mapstructure:"diff_against"`
+		DeltaOnly    bool          `mapstructure:"delta_only"`
+	} `mapstructure:"aws"`
 }
 
 func defaults() *Config {
@@ -95,6 +106,12 @@ func defaults() *Config {
 	cfg.Cloudflare.InventoryOut = ""
 	cfg.Cloudflare.DiffAgainst = ""
 	cfg.Cloudflare.DeltaOnly = false
+	cfg.AWS.Enabled = false
+	cfg.AWS.Profile = ""
+	cfg.AWS.Timeout = 15 * time.Second
+	cfg.AWS.InventoryOut = ""
+	cfg.AWS.DiffAgainst = ""
+	cfg.AWS.DeltaOnly = false
 	return cfg
 }
 

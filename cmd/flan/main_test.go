@@ -239,16 +239,16 @@ func TestDisplaySecurityHeaderFindingsKeepsPublicProbeNoise(t *testing.T) {
 	}
 }
 
-func TestCloudflareOutputHostsUsesDeltaSelection(t *testing.T) {
+func TestDiscoveryOutputTargetsUsesDeltaSelection(t *testing.T) {
 	allHosts := []string{"api.example.net", "admin.example.net"}
 	selectedHosts := []string{"api.example.net"}
 
-	got := cloudflareOutputHosts(allHosts, selectedHosts, true)
+	got := discoveryOutputTargets(allHosts, selectedHosts, true)
 	if !reflect.DeepEqual(got, selectedHosts) {
 		t.Fatalf("unexpected delta hosts: got %v want %v", got, selectedHosts)
 	}
 
-	got = cloudflareOutputHosts(allHosts, selectedHosts, false)
+	got = discoveryOutputTargets(allHosts, selectedHosts, false)
 	if !reflect.DeepEqual(got, allHosts) {
 		t.Fatalf("unexpected full hosts: got %v want %v", got, allHosts)
 	}

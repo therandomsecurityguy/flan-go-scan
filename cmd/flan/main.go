@@ -20,6 +20,7 @@ import (
 	"github.com/therandomsecurityguy/flan-go-scan/internal/config"
 	"github.com/therandomsecurityguy/flan-go-scan/internal/dns"
 	"github.com/therandomsecurityguy/flan-go-scan/internal/output"
+	awsprovider "github.com/therandomsecurityguy/flan-go-scan/internal/providers/aws"
 	cfprovider "github.com/therandomsecurityguy/flan-go-scan/internal/providers/cloudflare"
 	"github.com/therandomsecurityguy/flan-go-scan/internal/scanner"
 	"golang.org/x/sync/singleflight"
@@ -65,6 +66,14 @@ CONFIGURATION:
   --cloudflare-inventory-out string write normalized Cloudflare inventory snapshot to this path
   --cloudflare-diff-against string compare the current Cloudflare inventory against a previous snapshot (defaults to --cloudflare-inventory-out when omitted)
   --cloudflare-delta-only scan only added/changed Cloudflare hosts when a previous snapshot is available
+  --aws                    discover scan targets from AWS assets
+  --aws-profile string     AWS shared config profile to use
+  --aws-regions string     comma-separated AWS region filter
+  --aws-include string     comma-separated AWS target include filters
+  --aws-exclude string     comma-separated AWS target exclude filters
+  --aws-inventory-out string write normalized AWS inventory snapshot to this path
+  --aws-diff-against string compare the current AWS inventory against a previous snapshot (defaults to --aws-inventory-out when omitted)
+  --aws-delta-only         scan only added/changed AWS targets when a previous snapshot is available
   --passive-only           skip brute-force, use passive sources only
   --subdomains-only        print discovered subdomains and exit (subfinder-style)
   --subfinder-sources string comma-separated passive sources override
@@ -95,6 +104,7 @@ EXAMPLES:
   flan -l targets.txt --top-ports 1000
   flan -d example.net
   flan --cloudflare --cloudflare-zones example.net --cloudflare-include api.example.net
+  AWS_PROFILE=<profile> flan --aws --aws-regions us-west-2
   flan -d example.net --subdomains-only
   echo "10.0.0.0/24" | flan -l -
 
@@ -235,6 +245,14 @@ func main() {
 	cloudflareInventoryOut := flag.String("cloudflare-inventory-out", "", "")
 	cloudflareDiffAgainst := flag.String("cloudflare-diff-against", "", "")
 	cloudflareDeltaOnly := flag.Bool("cloudflare-delta-only", false, "")
+	awsFlag := flag.Bool("aws", false, "")
+	awsProfile := flag.String("aws-profile", "", "")
+	awsRegions := flag.String("aws-regions", "", "")
+	awsInclude := flag.String("aws-include", "", "")
+	awsExclude := flag.String("aws-exclude", "", "")
+	awsInventoryOut := flag.String("aws-inventory-out", "", "")
+	awsDiffAgainst := flag.String("aws-diff-against", "", "")
+	awsDeltaOnly := flag.Bool("aws-delta-only", false, "")
 	passiveOnly := flag.Bool("passive-only", false, "")
 	subdomainsOnly := flag.Bool("subdomains-only", false, "")
 	subfinderSources := flag.String("subfinder-sources", "", "")
@@ -305,8 +323,9 @@ func main() {
 		slog.Warn("--passive-only has no effect without -d")
 	}
 	cloudflareEnabled := *cloudflareFlag || cfg.Cloudflare.Enabled
-	if *subdomainsOnly && dom == "" && !cloudflareEnabled {
-		slog.Error("--subdomains-only requires -d/--domain or --cloudflare")
+	awsEnabled := *awsFlag || cfg.AWS.Enabled
+	if *subdomainsOnly && dom == "" && !cloudflareEnabled && !awsEnabled {
+		slog.Error("--subdomains-only requires -d/--domain, --cloudflare, or --aws")
 		os.Exit(1)
 	}
 	if *subdomainsOnly {
@@ -450,12 +469,100 @@ func main() {
 		}
 		hosts = append(hosts, selectedCFHosts...)
 		slog.Info("cloudflare discovery complete", "assets", len(assets), "hosts", len(cfHosts), "scan_hosts", len(selectedCFHosts))
-		if *subdomainsOnly && dom == "" {
-			for _, host := range cloudflareOutputHosts(cfHosts, selectedCFHosts, deltaOnly) {
+		if *subdomainsOnly && dom == "" && !awsEnabled {
+			for _, host := range discoveryOutputTargets(cfHosts, selectedCFHosts, deltaOnly) {
 				fmt.Println(host)
 			}
 			return
 		}
+	}
+	if awsEnabled {
+		profile := strings.TrimSpace(cfg.AWS.Profile)
+		if set["aws-profile"] {
+			profile = strings.TrimSpace(*awsProfile)
+		}
+
+		client := awsprovider.NewClient(profile, cfg.AWS.Timeout)
+		discoverOpts := awsprovider.DiscoverOptions{
+			Regions: cfg.AWS.Regions,
+			Include: cfg.AWS.Include,
+			Exclude: cfg.AWS.Exclude,
+		}
+		if set["aws-regions"] {
+			discoverOpts.Regions = splitCSV(*awsRegions)
+		}
+		if set["aws-include"] {
+			discoverOpts.Include = splitCSV(*awsInclude)
+		}
+		if set["aws-exclude"] {
+			discoverOpts.Exclude = splitCSV(*awsExclude)
+		}
+
+		slog.Info("discovering targets from AWS", "regions", len(discoverOpts.Regions), "profile", profileOrDefault(profile))
+		assets, err := client.Discover(ctx, discoverOpts)
+		if err != nil {
+			slog.Error("aws discovery failed", "err", err)
+			os.Exit(1)
+		}
+		awsTargets := awsprovider.Targets(assets)
+		selectedAWSTargets := awsTargets
+
+		inventoryOut := strings.TrimSpace(cfg.AWS.InventoryOut)
+		if set["aws-inventory-out"] {
+			inventoryOut = strings.TrimSpace(*awsInventoryOut)
+		}
+		snapshot := awsprovider.BuildInventorySnapshot(scanStarted, assets, discoverOpts)
+		diffAgainst := strings.TrimSpace(cfg.AWS.DiffAgainst)
+		if set["aws-diff-against"] {
+			diffAgainst = strings.TrimSpace(*awsDiffAgainst)
+		}
+		deltaOnly := cfg.AWS.DeltaOnly || *awsDeltaOnly
+		if diffAgainst == "" && inventoryOut != "" {
+			diffAgainst = inventoryOut
+			slog.Info("aws inventory diff base defaults to inventory output", "path", diffAgainst)
+		}
+		if diffAgainst != "" {
+			previous, err := output.ReadAWSInventory(diffAgainst)
+			if err == nil {
+				diff := awsprovider.DiffInventory(scanStarted, previous, snapshot)
+				slog.Info("aws inventory diff", "added", diff.AddedCount, "removed", diff.RemovedCount, "changed", diff.ChangedCount)
+				if deltaOnly {
+					selectedAWSTargets = awsprovider.TargetsFromDiff(diff)
+					noTargetsFromDelta = len(selectedAWSTargets) == 0
+					slog.Info("aws delta scan selection", "targets", len(selectedAWSTargets))
+				}
+				if path, err := output.WriteAWSInventoryDiff(cfg.Output.Directory, inventoryOut, diff); err != nil {
+					slog.Warn("failed to write aws inventory diff", "err", err)
+				} else if path != "" {
+					slog.Info("aws inventory diff written", "path", path)
+				}
+			} else if !os.IsNotExist(err) {
+				slog.Warn("failed to read previous aws inventory", "path", diffAgainst, "err", err)
+			} else if deltaOnly {
+				slog.Info("aws delta scan fallback to full inventory; previous snapshot not found", "path", diffAgainst)
+			}
+		} else if deltaOnly {
+			slog.Info("aws delta scan fallback to full inventory; no previous snapshot configured")
+		}
+		if path, err := output.WriteAWSInventory(cfg.Output.Directory, inventoryOut, snapshot); err != nil {
+			slog.Warn("failed to write aws inventory", "err", err)
+		} else if path != "" {
+			slog.Info("aws inventory written", "path", path)
+		}
+		hosts = append(hosts, selectedAWSTargets...)
+		slog.Info("aws discovery complete", "assets", len(assets), "targets", len(awsTargets), "scan_targets", len(selectedAWSTargets))
+		if *subdomainsOnly && dom == "" && !cloudflareEnabled {
+			for _, target := range discoveryOutputTargets(awsTargets, selectedAWSTargets, deltaOnly) {
+				fmt.Println(target)
+			}
+			return
+		}
+	}
+	if *subdomainsOnly && dom == "" && len(hosts) > 0 {
+		for _, host := range normalizeDiscoveredHosts(hosts) {
+			fmt.Println(host)
+		}
+		return
 	}
 	if dom != "" {
 		slog.Info("enumerating subdomains", "domain", dom)
@@ -564,7 +671,7 @@ func main() {
 			slog.Info("TXT records", "records", txtRecords)
 		}
 	}
-	if tgt == "" && dom == "" && !cloudflareEnabled {
+	if tgt == "" && dom == "" && !cloudflareEnabled && !awsEnabled {
 		hosts, err = readHosts(ipsFile)
 		if err != nil {
 			slog.Error("failed to read hosts", "err", err)
@@ -574,10 +681,10 @@ func main() {
 
 	if len(hosts) == 0 {
 		if noTargetsFromDelta {
-			slog.Info("no Cloudflare delta hosts to scan")
+			slog.Info("no delta targets to scan")
 			return
 		}
-		slog.Error("no hosts to scan, provide -t, -d, or -l")
+		slog.Error("no hosts to scan, provide -t, -d, -l, --cloudflare, or --aws")
 		os.Exit(1)
 	}
 	inputTargets := len(hosts)
@@ -632,7 +739,7 @@ func main() {
 	}
 	aliveTargets := len(targets)
 	metaInput := scanMetadataInput{
-		mode:            scanMode(dom != "", cloudflareEnabled),
+		mode:            scanMode(dom != "", cloudflareEnabled, awsEnabled),
 		inputTargets:    inputTargets,
 		resolvedTargets: resolvedTargets,
 		aliveTargets:    aliveTargets,
@@ -1651,11 +1758,21 @@ func displaySecurityHeaderFindings(res scanner.ScanResult) []scanner.HeaderFindi
 	return findings
 }
 
-func cloudflareOutputHosts(allHosts, selectedHosts []string, deltaOnly bool) []string {
+func discoveryOutputTargets(allTargets, selectedTargets []string, deltaOnly bool) []string {
 	if deltaOnly {
-		return selectedHosts
+		return selectedTargets
 	}
-	return allHosts
+	return allTargets
+}
+
+func profileOrDefault(profile string) string {
+	if strings.TrimSpace(profile) == "" {
+		if envProfile := strings.TrimSpace(os.Getenv("AWS_PROFILE")); envProfile != "" {
+			return envProfile
+		}
+		return "default"
+	}
+	return profile
 }
 
 func suppressPrettyHeaderFinding(res scanner.ScanResult, finding scanner.HeaderFinding) bool {
@@ -1715,17 +1832,25 @@ func enforceScanGuardrails(targetCount, portCount int, cfg *config.Config) error
 	return nil
 }
 
-func scanMode(domainMode bool, cloudflareMode bool) string {
-	if domainMode && cloudflareMode {
+func scanMode(domainMode bool, cloudflareMode bool, awsMode bool) string {
+	switch {
+	case domainMode && cloudflareMode && awsMode:
+		return "aws+cloudflare+domain"
+	case domainMode && cloudflareMode:
 		return "cloudflare+domain"
-	}
-	if cloudflareMode {
+	case domainMode && awsMode:
+		return "aws+domain"
+	case cloudflareMode && awsMode:
+		return "aws+cloudflare"
+	case awsMode:
+		return "aws"
+	case cloudflareMode:
 		return "cloudflare"
-	}
-	if domainMode {
+	case domainMode:
 		return "domain"
+	default:
+		return "target"
 	}
-	return "target"
 }
 
 type scanMetadataInput struct {
