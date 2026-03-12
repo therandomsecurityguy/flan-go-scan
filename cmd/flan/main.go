@@ -1066,6 +1066,9 @@ func main() {
 			printAnalysis(brief)
 			fmt.Printf("\033[2m  Powered by Together AI (%s)\033[0m\n", scanner.TogetherModel)
 			fmt.Println()
+		} else {
+			fmt.Println()
+			fmt.Printf("  \033[33m~\033[0m  AI summary skipped: %s\n\n", summarizeAnalysisError(err))
 		}
 	}
 
@@ -1820,6 +1823,25 @@ func isTransientAPIValidationError(err error) bool {
 		strings.Contains(msg, "temporary") ||
 		strings.Contains(msg, "connection refused") ||
 		strings.Contains(msg, "no such host")
+}
+
+func summarizeAnalysisError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "402 Payment Required"):
+		return "Together API billing or credit limit issue"
+	case strings.Contains(msg, "401"):
+		return "Together API authentication failed"
+	case strings.Contains(msg, "403"):
+		return "Together API access denied"
+	case strings.Contains(msg, "429"):
+		return "Together API rate limited the request"
+	default:
+		return "Together AI request failed"
+	}
 }
 
 func enforceScanGuardrails(targetCount, portCount int, cfg *config.Config) error {

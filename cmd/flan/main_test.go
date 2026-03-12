@@ -204,6 +204,28 @@ func TestIsTransientAPIValidationError(t *testing.T) {
 	}
 }
 
+func TestSummarizeAnalysisError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "payment required", err: fmt.Errorf("together API call failed: 402 Payment Required"), want: "Together API billing or credit limit issue"},
+		{name: "unauthorized", err: fmt.Errorf("together API call failed: 401 Unauthorized"), want: "Together API authentication failed"},
+		{name: "forbidden", err: fmt.Errorf("together API call failed: 403 Forbidden"), want: "Together API access denied"},
+		{name: "rate limited", err: fmt.Errorf("together API call failed: 429 Too Many Requests"), want: "Together API rate limited the request"},
+		{name: "generic", err: fmt.Errorf("dial tcp timeout"), want: "Together AI request failed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := summarizeAnalysisError(tt.err); got != tt.want {
+				t.Fatalf("unexpected summary: got %q want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDisplaySecurityHeaderFindingsSuppressesInternalProbeNoise(t *testing.T) {
 	res := scanner.ScanResult{
 		Hostname: "internal-api.example.net",
