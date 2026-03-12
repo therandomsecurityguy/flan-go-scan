@@ -217,6 +217,9 @@ Scan with detailed AI-powered analysis (requires `TOGETHER_API_KEY`):
 flan -t scanme.nmap.org --analyze
 ```
 
+> [!TIP]
+> Use `--analyze` when you want the full AI report saved alongside scan artifacts. The default pretty-mode AI summary is intended for quick triage, not detailed remediation tracking.
+
 Use a custom asset context file for policy-aware AI analysis:
 
 ```
@@ -225,17 +228,26 @@ flan -t api.example.com --context /path/to/context.yaml
 
 ## Runtime Behavior
 
-Context is loaded automatically from `config/context.yaml` when present. It defines asset criticality, data classification, and security policies such as TLS minimum version, SSH auth requirements, and allowed ports. Policy violations are flagged before AI analysis runs.
+> [!NOTE]
+> `config/context.yaml` is loaded automatically when present. It defines asset criticality, data classification, and security policies such as TLS minimum version, SSH auth requirements, and allowed ports. Policy violations are flagged before AI analysis runs.
 
-Security-header findings are generated for HTTP `2xx/3xx` responses. For `4xx/5xx` responses, which are common on load balancer and CDN default pages, Flan reports header checks as skipped.
+> [!TIP]
+> Security-header findings are generated only for HTTP `2xx/3xx` responses. On `4xx/5xx` responses, which are common on load balancer and CDN default pages, Flan reports header checks as skipped instead of treating them as header failures.
 
-Flan uses a deterministic resolver chain: custom resolver when provided, otherwise the system resolver, then configured fallbacks. Resolver and cache stats are recorded in scan metadata.
+> [!IMPORTANT]
+> Flan uses a deterministic resolver chain: custom resolver when provided, otherwise the system resolver, then configured fallbacks. Resolver and cache stats are recorded in scan metadata.
 
-Cloudflare discovery uses zones as the discovery boundary. It keeps `A`, `AAAA`, and `CNAME` scan candidates and skips validation, wildcard, and non-public-IP records by default. It can persist a normalized inventory snapshot, compare it against a prior snapshot, and optionally narrow scans to added or changed hosts for scheduled delta workflows. If `--cloudflare-diff-against` is omitted but `--cloudflare-inventory-out` is set, Flan reuses the inventory output path as the diff base.
+> [!NOTE]
+> Cloudflare discovery is zone-based. It keeps `A`, `AAAA`, and `CNAME` scan candidates and skips validation, wildcard, and non-public-IP records by default. It can persist normalized inventory snapshots, diff them across runs, and optionally narrow scans to added or changed hosts. If `--cloudflare-diff-against` is omitted but `--cloudflare-inventory-out` is set, Flan reuses the inventory output path as the diff base.
 
-AWS discovery is inventory-first. It collects public scan targets from `Route53`, `EC2`, `ELB/ELBv2`, `CloudFront`, `API Gateway`, `Lightsail`, `EKS`, `Lambda` function URLs, and S3 website endpoints. It can persist a normalized inventory snapshot, compare it against a prior snapshot, and optionally narrow scans to added or changed targets. If `--aws-diff-against` is omitted but `--aws-inventory-out` is set, Flan reuses the inventory output path as the diff base.
+> [!NOTE]
+> AWS discovery is inventory-first. It collects public scan targets from `Route53`, `EC2`, `ELB/ELBv2`, `CloudFront`, `API Gateway`, `Lightsail`, `EKS`, `Lambda` function URLs, and S3 website endpoints. It can persist normalized inventory snapshots, diff them across runs, and optionally narrow scans to added or changed targets. If `--aws-diff-against` is omitted but `--aws-inventory-out` is set, Flan reuses the inventory output path as the diff base.
 
-For GitHub Actions automation, set the repository secret `CLOUDFLARE_API_TOKEN`. To avoid putting Cloudflare scope in plaintext repo settings, pass zones, include, and exclude filters as manual workflow inputs or store them in secrets named `CLOUDFLARE_ZONES`, `CLOUDFLARE_INCLUDE`, `CLOUDFLARE_EXCLUDE`, and `CLOUDFLARE_TOP_PORTS`.
+> [!WARNING]
+> Keep provider credentials and API keys out of config files and committed shell scripts. Use environment variables such as `TOGETHER_API_KEY`, `CLOUDFLARE_API_TOKEN`, and `AWS_PROFILE`, or inject them through your CI secret store.
+
+> [!TIP]
+> For GitHub Actions automation, set the repository secret `CLOUDFLARE_API_TOKEN`. To avoid putting Cloudflare scope in plaintext repo settings, pass zones, include, and exclude filters as manual workflow inputs or store them in secrets named `CLOUDFLARE_ZONES`, `CLOUDFLARE_INCLUDE`, `CLOUDFLARE_EXCLUDE`, and `CLOUDFLARE_TOP_PORTS`.
 
 ## Config Defaults
 

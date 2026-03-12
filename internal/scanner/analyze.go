@@ -29,14 +29,20 @@ type AnalysisUsage struct {
 
 const TogetherModel = "Qwen/Qwen3.5-9B"
 
-const briefSystemPrompt = `You are a security expert. Summarize the scan results in 5-7 bullet points:
+const briefSystemPrompt = `You are a security expert. Return only the final report inside <report>...</report>.
+Do not include reasoning, hidden thoughts, step-by-step analysis, or headings such as "Thinking Process".
+
+Summarize the scan results in 5-7 bullet points:
 - Lead with critical/high severity findings; include a one-line remediation for each
 - Cover medium severity issues (missing headers, weak TLS, exposed admin interfaces, version disclosure)
 - Flag suspicious or non-standard ports by number -- apply known associations (31337 = Back Orifice, 4444 = Metasploit, 9929 = nping-echo, 6666 = IRC/malware)
 - Close with one sentence on overall risk posture
 Each bullet: what it is, why it matters, what to do. No preamble.`
 
-const systemPrompt = `You are a security expert analyzing network scan results. For each finding, provide:
+const systemPrompt = `You are a security expert analyzing network scan results. Return only the final report inside <report>...</report>.
+Do not include reasoning, hidden thoughts, scratch work, or headings such as "Thinking Process", "Analysis", or "Step-by-step".
+
+For each finding, provide:
 
 1. Severity (CRITICAL/HIGH/MEDIUM/LOW/INFO)
 2. What was found and why it matters
@@ -102,13 +108,20 @@ func Analyze(ctx context.Context, results []ScanResult, outputDir string, sc *Sc
 				OfChatCompletionNewsMessageChatCompletionUserMessageParam: &together.ChatCompletionNewParamsMessageChatCompletionUserMessageParam{
 					Role: "user",
 					Content: together.ChatCompletionNewParamsMessageChatCompletionUserMessageParamContentUnion{
-						OfString: together.String(fmt.Sprintf("Analyze these network scan results:\n\n%s", summary)),
+						OfString: together.String(fmt.Sprintf("Analyze these network scan results and return only the final report inside <report> tags:\n\n%s", summary)),
 					},
 				},
 			},
 		},
-		MaxTokens:   together.Int(2000),
-		Temperature: together.Float(0.3),
+		Reasoning: together.ChatCompletionNewParamsReasoning{
+			Enabled: together.Bool(false),
+		},
+		ReasoningEffort: together.ChatCompletionNewParamsReasoningEffortLow,
+		ResponseFormat: together.ChatCompletionNewParamsResponseFormatUnion{
+			OfText: &together.ChatCompletionNewParamsResponseFormatText{},
+		},
+		MaxTokens:   together.Int(1400),
+		Temperature: together.Float(0.2),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("together API call failed: %w", err)
@@ -178,10 +191,17 @@ func AnalyzeBrief(ctx context.Context, results []ScanResult, sc *ScanContext) (s
 				OfChatCompletionNewsMessageChatCompletionUserMessageParam: &together.ChatCompletionNewParamsMessageChatCompletionUserMessageParam{
 					Role: "user",
 					Content: together.ChatCompletionNewParamsMessageChatCompletionUserMessageParamContentUnion{
-						OfString: together.String(fmt.Sprintf("Summarize:\n\n%s", summary)),
+						OfString: together.String(fmt.Sprintf("Summarize and return only the final report inside <report> tags:\n\n%s", summary)),
 					},
 				},
 			},
+		},
+		Reasoning: together.ChatCompletionNewParamsReasoning{
+			Enabled: together.Bool(false),
+		},
+		ReasoningEffort: together.ChatCompletionNewParamsReasoningEffortLow,
+		ResponseFormat: together.ChatCompletionNewParamsResponseFormatUnion{
+			OfText: &together.ChatCompletionNewParamsResponseFormatText{},
 		},
 		MaxTokens:   together.Int(400),
 		Temperature: together.Float(0.2),
@@ -201,16 +221,55 @@ func AnalyzeBrief(ctx context.Context, results []ScanResult, sc *ScanContext) (s
 }
 
 func choiceContent(choice together.ChatCompletionChoice) string {
-	if text := strings.TrimSpace(choice.Message.Content); text != "" {
+	if text := sanitizeModelOutput(choice.Message.Content); text != "" {
 		return text
 	}
-	if text := strings.TrimSpace(choice.Text); text != "" {
+	if text := sanitizeModelOutput(choice.Text); text != "" {
 		return text
 	}
-	if text := strings.TrimSpace(choice.Message.Reasoning); text != "" {
+	if text := sanitizeModelOutput(choice.Message.Reasoning); text != "" {
 		return text
 	}
 	return ""
+}
+
+func sanitizeModelOutput(raw string) string {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return ""
+	}
+
+	if report := extractTaggedReport(text); report != "" {
+		return report
+	}
+
+	lower := strings.ToLower(text)
+	for _, marker := range []string{"final answer:", "report:"} {
+		if idx := strings.Index(lower, marker); idx >= 0 {
+			text = strings.TrimSpace(text[idx+len(marker):])
+			lower = strings.ToLower(text)
+			break
+		}
+	}
+
+	if strings.HasPrefix(lower, "thinking process:") ||
+		strings.HasPrefix(lower, "analysis:") ||
+		strings.HasPrefix(lower, "step-by-step:") {
+		return ""
+	}
+
+	return strings.TrimSpace(text)
+}
+
+func extractTaggedReport(text string) string {
+	lower := strings.ToLower(text)
+	start := strings.Index(lower, "<report>")
+	end := strings.Index(lower, "</report>")
+	if start < 0 || end < 0 || end <= start {
+		return ""
+	}
+	start += len("<report>")
+	return strings.TrimSpace(text[start:end])
 }
 
 func buildSummary(results []ScanResult) string {
