@@ -231,27 +231,7 @@ flan -t api.example.com --context /path/to/context.yaml
 > [!NOTE]
 > `config/context.yaml` is loaded automatically when present. It defines asset criticality, data classification, and security policies such as TLS minimum version, SSH auth requirements, and allowed ports. Policy violations are flagged before AI analysis runs.
 
-> [!TIP]
-> Security-header findings are generated only for HTTP `2xx/3xx` responses. On `4xx/5xx` responses, which are common on load balancer and CDN default pages, Flan reports header checks as skipped instead of treating them as header failures.
-
-> [!IMPORTANT]
-> Flan uses a deterministic resolver chain: custom resolver when provided, otherwise the system resolver, then configured fallbacks. Resolver and cache stats are recorded in scan metadata.
-
-> [!NOTE]
-> Cloudflare discovery is zone-based. It keeps `A`, `AAAA`, and `CNAME` scan candidates and skips validation, wildcard, and non-public-IP records by default. It can persist normalized inventory snapshots, diff them across runs, and optionally narrow scans to added or changed hosts. If `--cloudflare-diff-against` is omitted but `--cloudflare-inventory-out` is set, Flan reuses the inventory output path as the diff base.
-
-> [!NOTE]
-> AWS discovery is inventory-first. It collects public scan targets from `Route53`, `EC2`, `ELB/ELBv2`, `CloudFront`, `API Gateway`, `Lightsail`, `EKS`, `Lambda` function URLs, and S3 website endpoints. It can persist normalized inventory snapshots, diff them across runs, and optionally narrow scans to added or changed targets. If `--aws-diff-against` is omitted but `--aws-inventory-out` is set, Flan reuses the inventory output path as the diff base.
-
-> [!WARNING]
-> Keep provider credentials and API keys out of config files and committed shell scripts. Use environment variables such as `TOGETHER_API_KEY`, `CLOUDFLARE_API_TOKEN`, and `AWS_PROFILE`, or inject them through your CI secret store.
-
-> [!TIP]
-> For GitHub Actions automation, set the repository secret `CLOUDFLARE_API_TOKEN`. To avoid putting Cloudflare scope in plaintext repo settings, pass zones, include, and exclude filters as manual workflow inputs or store them in secrets named `CLOUDFLARE_ZONES`, `CLOUDFLARE_INCLUDE`, `CLOUDFLARE_EXCLUDE`, and `CLOUDFLARE_TOP_PORTS`.
-
-## Config Defaults
-
-Guardrails, DNS policy, Cloudflare discovery, and AWS discovery settings are configurable in `config/config.yaml`:
+Flan uses a deterministic resolver chain: custom resolver when provided, otherwise the system resolver, then configured fallbacks. Resolver and cache stats are recorded in scan metadata.
 
 ```yaml
 scan:
@@ -262,6 +242,19 @@ dns:
   resolver: ""
   fallback_resolvers: ["1.1.1.1:53", "8.8.8.8:53"]
   lookup_timeout: 3s
+```
+
+> [!TIP]
+Security-header findings are generated only for HTTP `2xx/3xx` responses. On `4xx/5xx` responses, which are common on load balancer and CDN default pages, Flan reports header checks as skipped instead of treating them as header failures.
+
+> [!WARNING]
+Keep provider credentials and API keys out of config files and committed shell scripts. Use environment variables such as `TOGETHER_API_KEY`, `CLOUDFLARE_API_TOKEN`, and `AWS_PROFILE`, or inject them through your CI secret store.
+
+### Cloudflare Discovery
+
+Cloudflare discovery is zone-based. It keeps `A`, `AAAA`, and `CNAME` scan candidates and skips validation, wildcard, and non-public-IP records by default. It can persist normalized inventory snapshots, diff them across runs, and optionally narrow scans to added or changed hosts. If `--cloudflare-diff-against` is omitted but `--cloudflare-inventory-out` is set, Flan reuses the inventory output path as the diff base.
+
+```yaml
 cloudflare:
   enabled: false
   zones: []
@@ -272,6 +265,18 @@ cloudflare:
   inventory_out: ""
   diff_against: ""
   delta_only: false
+```
+
+```text
+GitHub Actions: set CLOUDFLARE_API_TOKEN as a repository secret.
+Optional scope inputs: CLOUDFLARE_ZONES, CLOUDFLARE_INCLUDE, CLOUDFLARE_EXCLUDE, CLOUDFLARE_TOP_PORTS.
+```
+
+### AWS Discovery
+
+AWS discovery is inventory-first. It collects public scan targets from `Route53`, `EC2`, `ELB/ELBv2`, `CloudFront`, `API Gateway`, `Lightsail`, `EKS`, `Lambda` function URLs, and S3 website endpoints. It can persist normalized inventory snapshots, diff them across runs, and optionally narrow scans to added or changed targets. If `--aws-diff-against` is omitted but `--aws-inventory-out` is set, Flan reuses the inventory output path as the diff base.
+
+```yaml
 aws:
   enabled: false
   profile: ""
@@ -282,6 +287,11 @@ aws:
   inventory_out: ""
   diff_against: ""
   delta_only: false
+```
+
+```text
+Authentication uses the standard AWS SDK credential chain.
+Common options: AWS_PROFILE=<profile>, aws sso login, or environment credentials.
 ```
 
 ## Flags
