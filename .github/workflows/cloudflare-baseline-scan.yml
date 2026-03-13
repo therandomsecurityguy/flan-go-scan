@@ -1,4 +1,4 @@
-name: Cloudflare Baseline Scan
+name: Cloudflare Baseline Scan (Disabled)
 
 on:
   workflow_dispatch:
@@ -19,8 +19,6 @@ on:
         description: Top port preset for scanning (100, 1000, 2000, 5000)
         required: false
         type: string
-  schedule:
-    - cron: "43 3 * * *"
 
 permissions:
   contents: read
@@ -31,6 +29,7 @@ concurrency:
 
 jobs:
   baseline-scan:
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
