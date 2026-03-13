@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	"github.com/therandomsecurityguy/flan-go-scan/internal/config"
@@ -58,77 +59,93 @@ func printBanner() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `Usage:
-  flan [flags]
+	fmt.Fprintln(os.Stderr, "Usage:")
+	fmt.Fprintln(os.Stderr, "  flan [flags]")
+	fmt.Fprintln(os.Stderr)
 
-GENERAL:
-  -h, --help              show help
-  -v, --version           show version
+	printUsageSection("GENERAL", [][2]string{
+		{"-h, --help", "show help"},
+		{"-v, --version", "show version"},
+	})
+	printUsageSection("TARGET", [][2]string{
+		{"-t, -target string", "target host/IP to scan"},
+		{"-l, -list string", `file containing targets (default "ips.txt")`},
+		{"-d, -domain string", "domain to enumerate via DNS"},
+	})
+	printUsageSection("PORTS", [][2]string{
+		{"-p, -ports string", "ports to scan (from config if not set)"},
+		{"--top-ports string", "use top port list: 100, 1000, 2000, or 5000"},
+		{"--subdomain-ports string", "domain mode port profile: web, standard, or full (default: web)"},
+	})
+	printUsageSection("CONFIGURATION", [][2]string{
+		{"-c, -config string", `path to config file (default "config/config.yaml")`},
+		{"-w, -wordlist string", "custom DNS subdomain wordlist file"},
+		{"-r, -resolver string", "custom DNS resolver (ip:port)"},
+		{"--cloudflare", "discover scan targets from Cloudflare zones"},
+		{"--cloudflare-zones string", "comma-separated Cloudflare zone filter"},
+		{"--cloudflare-include string", "comma-separated hostname include filters"},
+		{"--cloudflare-exclude string", "comma-separated hostname exclude filters"},
+		{"--cloudflare-inventory-out string", "write normalized Cloudflare inventory snapshot to this path"},
+		{"--cloudflare-diff-against string", "compare the current Cloudflare inventory against a previous snapshot (defaults to --cloudflare-inventory-out when omitted)"},
+		{"--cloudflare-delta-only", "scan only added/changed Cloudflare hosts when a previous snapshot is available"},
+		{"--aws", "discover scan targets from AWS assets"},
+		{"--aws-profile string", "AWS shared config profile to use"},
+		{"--aws-regions string", "comma-separated AWS region filter"},
+		{"--aws-include string", "comma-separated AWS target include filters"},
+		{"--aws-exclude string", "comma-separated AWS target exclude filters"},
+		{"--aws-inventory-out string", "write normalized AWS inventory snapshot to this path"},
+		{"--aws-diff-against string", "compare the current AWS inventory against a previous snapshot (defaults to --aws-inventory-out when omitted)"},
+		{"--aws-delta-only", "scan only added/changed AWS targets when a previous snapshot is available"},
+		{"--passive-only", "skip brute-force, use passive sources only"},
+		{"--subdomains-only", "print discovered subdomains and exit (subfinder-style)"},
+		{"--subfinder-sources string", "comma-separated passive sources override"},
+		{"--subfinder-exclude-sources string", "comma-separated passive sources to exclude"},
+		{"--subfinder-all", "use all subfinder sources (can be slower)"},
+		{"--subfinder-recursive", "use only recursive-capable passive sources"},
+		{"--subfinder-max-time int", "max passive enumeration time in minutes"},
+		{"--subfinder-rate-limit int", "passive enumeration HTTP requests/second"},
+		{"--subfinder-threads int", "passive enumeration threads"},
+		{"--subfinder-provider-config string", "path to subfinder provider config"},
+		{"--scan-cdn", "scan all ports on CDN hosts (default: 80,443 only)"},
+		{"--udp", "enable UDP scanning (ports 53,123,161,500 by default)"},
+		{"--crawl", "crawl HTTP/HTTPS services for endpoints and sensitive paths"},
+		{"--crawl-depth int", "max crawl depth (default: 2)"},
+		{"--tls-enum", "enumerate supported TLS versions and cipher suites (~60 connections per TLS port)"},
+		{"--tls-verify", "verify TLS certificates (default: skip verification)"},
+		{"--asn", "look up ASN and organization for each host via Cymru DNS"},
+		{"--context string", "YAML file with asset context and policies for AI analysis"},
+		{"--analyze", "AI-powered analysis via Together API (requires TOGETHER_API_KEY)"},
+	})
+	printUsageSection("OUTPUT", [][2]string{
+		{"--json", "output in JSON format"},
+		{"--jsonl", "output in JSONL format (streaming)"},
+		{"--csv", "output in CSV format"},
+	})
 
-TARGET:
-  -t, -target string       target host/IP to scan
-  -l, -list string         file containing targets (default "ips.txt")
-  -d, -domain string       domain to enumerate via DNS
+	fmt.Fprintln(os.Stderr, "EXAMPLES:")
+	examples := []string{
+		"flan -t scanme.nmap.org",
+		"flan -l targets.txt --top-ports 1000",
+		"flan -d example.net",
+		"flan --cloudflare --cloudflare-zones example.net --cloudflare-include api.example.net",
+		"AWS_PROFILE=<profile> flan --aws --aws-regions us-west-2",
+		"flan -d example.net --subdomains-only",
+		`echo "10.0.0.0/24" | flan -l -`,
+	}
+	for _, ex := range examples {
+		fmt.Fprintf(os.Stderr, "  %s\n", ex)
+	}
+	fmt.Fprintln(os.Stderr)
+}
 
-PORTS:
-  -p, -ports string        ports to scan (from config if not set)
-  --top-ports string       use top port list: 100, 1000, 2000, or 5000
-  --subdomain-ports string domain mode port profile: web, standard, or full (default: web)
-
-CONFIGURATION:
-  -c, -config string       path to config file (default "config/config.yaml")
-  -w, -wordlist string     custom DNS subdomain wordlist file
-  -r, -resolver string     custom DNS resolver (ip:port)
-  --cloudflare             discover scan targets from Cloudflare zones
-  --cloudflare-zones string comma-separated Cloudflare zone filter
-  --cloudflare-include string comma-separated hostname include filters
-  --cloudflare-exclude string comma-separated hostname exclude filters
-  --cloudflare-inventory-out string write normalized Cloudflare inventory snapshot to this path
-  --cloudflare-diff-against string compare the current Cloudflare inventory against a previous snapshot (defaults to --cloudflare-inventory-out when omitted)
-  --cloudflare-delta-only scan only added/changed Cloudflare hosts when a previous snapshot is available
-  --aws                    discover scan targets from AWS assets
-  --aws-profile string     AWS shared config profile to use
-  --aws-regions string     comma-separated AWS region filter
-  --aws-include string     comma-separated AWS target include filters
-  --aws-exclude string     comma-separated AWS target exclude filters
-  --aws-inventory-out string write normalized AWS inventory snapshot to this path
-  --aws-diff-against string compare the current AWS inventory against a previous snapshot (defaults to --aws-inventory-out when omitted)
-  --aws-delta-only         scan only added/changed AWS targets when a previous snapshot is available
-  --passive-only           skip brute-force, use passive sources only
-  --subdomains-only        print discovered subdomains and exit (subfinder-style)
-  --subfinder-sources string comma-separated passive sources override
-  --subfinder-exclude-sources string comma-separated passive sources to exclude
-  --subfinder-all          use all subfinder sources (can be slower)
-  --subfinder-recursive    use only recursive-capable passive sources
-  --subfinder-max-time int max passive enumeration time in minutes
-  --subfinder-rate-limit int passive enumeration HTTP requests/second
-  --subfinder-threads int  passive enumeration threads
-  --subfinder-provider-config string path to subfinder provider config
-  --scan-cdn               scan all ports on CDN hosts (default: 80,443 only)
-  --udp                    enable UDP scanning (ports 53,123,161,500 by default)
-  --crawl                  crawl HTTP/HTTPS services for endpoints and sensitive paths
-  --crawl-depth int        max crawl depth (default: 2)
-  --tls-enum               enumerate supported TLS versions and cipher suites (~60 connections per TLS port)
-  --tls-verify             verify TLS certificates (default: skip verification)
-  --asn                    look up ASN and organization for each host via Cymru DNS
-  --context string         YAML file with asset context and policies for AI analysis
-  --analyze                AI-powered analysis via Together API (requires TOGETHER_API_KEY)
-
-OUTPUT:
-  --json                   output in JSON format
-  --jsonl                  output in JSONL format (streaming)
-  --csv                    output in CSV format
-
-EXAMPLES:
-  flan -t scanme.nmap.org
-  flan -l targets.txt --top-ports 1000
-  flan -d example.net
-  flan --cloudflare --cloudflare-zones example.net --cloudflare-include api.example.net
-  AWS_PROFILE=<profile> flan --aws --aws-regions us-west-2
-  flan -d example.net --subdomains-only
-  echo "10.0.0.0/24" | flan -l -
-
-`)
+func printUsageSection(title string, rows [][2]string) {
+	fmt.Fprintf(os.Stderr, "%s:\n", title)
+	w := tabwriter.NewWriter(os.Stderr, 0, 0, 2, ' ', 0)
+	for _, row := range rows {
+		fmt.Fprintf(w, "  %s\t%s\n", row[0], row[1])
+	}
+	_ = w.Flush()
+	fmt.Fprintln(os.Stderr)
 }
 
 const (
