@@ -28,22 +28,42 @@ import (
 
 var version = "dev"
 
-const banner = `
-  __ _
- / _| | __ _ _ __    ___  ___ __ _ _ __
-| |_| |/ _' | '_ \  / __|/ __/ _' | '_ \
-|  _| | (_| | | | | \__ \ (_| (_| | | | |
-|_| |_|\__,_|_| |_| |___/\___\__,_|_| |_| %s
-
-`
-
 func printBanner() {
-	fmt.Fprintf(os.Stderr, "\033[36m"+banner+"\033[0m", version)
+	logo := []string{
+		"███████╗██╗      █████╗ ███╗   ██╗",
+		"██╔════╝██║     ██╔══██╗████╗  ██║",
+		"█████╗  ██║     ███████║██╔██╗ ██║",
+		"██╔══╝  ██║     ██╔══██║██║╚██╗██║",
+		"██║     ███████╗██║  ██║██║ ╚████║",
+		"╚═╝     ╚══════╝╚═╝  ╚═╝╚═╝  ╚═══╝",
+	}
+	side := []string{
+		"",
+		"swiss army knife network scanner",
+		fmt.Sprintf("powered by Together AI (%s)", scanner.TogetherModel),
+		"",
+		fmt.Sprintf("[%s]", version),
+		"",
+	}
+
+	fmt.Fprintln(os.Stderr)
+	for i := range logo {
+		fmt.Fprintf(os.Stderr, "\033[1;35m%s\033[0m", logo[i])
+		if side[i] != "" {
+			fmt.Fprintf(os.Stderr, "  \033[1;96m%s\033[0m", side[i])
+		}
+		fmt.Fprintln(os.Stderr)
+	}
+	fmt.Fprintln(os.Stderr)
 }
 
 func usage() {
 	fmt.Fprintf(os.Stderr, `Usage:
   flan [flags]
+
+GENERAL:
+  -h, --help              show help
+  -v, --version           show version
 
 TARGET:
   -t, -target string       target host/IP to scan
@@ -220,7 +240,6 @@ func readHosts(filename string) ([]string, error) {
 
 func main() {
 	flag.Usage = usage
-	printBanner()
 
 	configPath := flag.String("config", "config/config.yaml", "")
 	configShort := flag.String("c", "config/config.yaml", "")
@@ -275,7 +294,22 @@ func main() {
 	jsonFlag := flag.Bool("json", false, "")
 	jsonlFlag := flag.Bool("jsonl", false, "")
 	csvFlag := flag.Bool("csv", false, "")
+	helpFlag := flag.Bool("help", false, "")
+	helpShort := flag.Bool("h", false, "")
+	versionFlag := flag.Bool("version", false, "")
+	versionShort := flag.Bool("v", false, "")
 	flag.Parse()
+
+	if *helpFlag || *helpShort {
+		usage()
+		return
+	}
+	if *versionFlag || *versionShort {
+		fmt.Println(version)
+		return
+	}
+
+	printBanner()
 
 	set := make(map[string]bool)
 	flag.Visit(func(f *flag.Flag) { set[f.Name] = true })

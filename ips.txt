@@ -1,3 +1,1 @@
 scanme.nmap.org
-healthybyte.net
-randomsecurity.dev
