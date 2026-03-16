@@ -40,6 +40,10 @@ Flan is a Swiss army knife network scanner in Go. Successor to [Flan Scan](https
 - Security header checks are evaluated on `2xx/3xx` HTTP responses; `4xx/5xx` responses are reported as skipped
 - Configurable via YAML
 
+## Architecture
+
+![Flan Scan Runtime](docs/assets/flan-scan-runtime.png)
+
 ## Installation
 
 From GitHub:
@@ -249,6 +253,10 @@ Security-header findings are generated only for HTTP `2xx/3xx` responses. On `4x
 
 > [!WARNING]
 Keep provider credentials and API keys out of config files and committed shell scripts. Use environment variables such as `TOGETHER_API_KEY`, `CLOUDFLARE_API_TOKEN`, and `AWS_PROFILE`, or inject them through your CI secret store.
+
+### Control Plane & Discovery
+
+![Flan Control Plane And Discovery](docs/assets/flan-control-plane-discovery.png)
 
 ### Cloudflare Discovery
 
