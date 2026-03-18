@@ -94,6 +94,7 @@ func TestWriteScanMetadata(t *testing.T) {
 		ServicesFound:   5,
 		RateLimit:       200,
 		Workers:         100,
+		MaxHostConns:    2,
 		Guardrails: GuardrailsMetadata{
 			MaxTargets:        5000,
 			MaxPortsPerTarget: 2000,
@@ -117,6 +118,9 @@ func TestWriteScanMetadata(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"mode": "target"`) {
 		t.Fatalf("unexpected metadata content: %s", string(data))
+	}
+	if !strings.Contains(string(data), `"max_host_conns": 2`) {
+		t.Fatalf("expected max_host_conns in metadata content: %s", string(data))
 	}
 }
 

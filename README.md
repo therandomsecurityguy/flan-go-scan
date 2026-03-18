@@ -239,6 +239,9 @@ Flan uses a deterministic resolver chain: custom resolver when provided, otherwi
 
 ```yaml
 scan:
+  rate_limit: 200
+  workers: 100
+  max_host_conns: 0
   max_targets: 5000
   max_ports_per_target: 5000
   max_duration: 30m
@@ -247,6 +250,8 @@ dns:
   fallback_resolvers: ["1.1.1.1:53", "8.8.8.8:53"]
   lookup_timeout: 3s
 ```
+
+Use `--workers`, `--rate-limit`, and `--max-host-conns` to tune scan concurrency and make large inventory-backed runs gentler on shared targets and load-balanced services.
 
 > [!TIP]
 Security-header findings are generated only for HTTP `2xx/3xx` responses. On `4xx/5xx` responses, which are common on load balancer and CDN default pages, Flan reports header checks as skipped instead of treating them as header failures.
@@ -313,6 +318,9 @@ Common options: AWS_PROFILE=<profile>, aws sso login, or environment credentials
 | `--top-ports` | Use top port profile: `100`, `1000`, `2000`, or `5000` |
 | `--subdomain-ports` | Domain mode port profile: `web`, `standard`, or `full` |
 | `-c` | Config file (default `config/config.yaml`) |
+| `--workers` | Number of concurrent scan workers |
+| `--rate-limit` | Global scan requests per second |
+| `--max-host-conns` | Max concurrent scan connections per host IP (`0` disables) |
 | `-w` | Custom DNS subdomain wordlist |
 | `-r` | Custom DNS resolver (ip:port) |
 | `--cloudflare` | Discover scan targets from Cloudflare zone DNS records |

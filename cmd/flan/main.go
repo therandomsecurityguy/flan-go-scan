@@ -79,6 +79,9 @@ func usage() {
 	})
 	printUsageSection("CONFIGURATION", [][2]string{
 		{"-c, -config string", `path to config file (default "config/config.yaml")`},
+		{"--workers int", "number of concurrent scan workers"},
+		{"--rate-limit int", "global scan requests per second"},
+		{"--max-host-conns int", "max concurrent scan connections per host IP (0 disables)"},
 		{"-w, -wordlist string", "custom DNS subdomain wordlist file"},
 		{"-r, -resolver string", "custom DNS resolver (ip:port)"},
 		{"--cloudflare", "discover scan targets from Cloudflare zones"},
@@ -270,6 +273,9 @@ func main() {
 	portsShort := flag.String("p", "", "")
 	topPorts := flag.String("top-ports", "", "")
 	subdomainPorts := flag.String("subdomain-ports", "", "")
+	workersFlag := flag.Int("workers", 0, "")
+	rateLimitFlag := flag.Int("rate-limit", 0, "")
+	maxHostConnsFlag := flag.Int("max-host-conns", 0, "")
 	wordlist := flag.String("wordlist", "", "")
 	wordlistShort := flag.String("w", "", "")
 	resolver := flag.String("resolver", "", "")
@@ -352,6 +358,15 @@ func main() {
 
 	if set["crawl-depth"] && *crawlDepth > 0 {
 		cfg.Scan.CrawlDepth = *crawlDepth
+	}
+	if set["workers"] && *workersFlag > 0 {
+		cfg.Scan.Workers = *workersFlag
+	}
+	if set["rate-limit"] && *rateLimitFlag >= 0 {
+		cfg.Scan.RateLimit = *rateLimitFlag
+	}
+	if set["max-host-conns"] && *maxHostConnsFlag >= 0 {
+		cfg.Scan.MaxHostConns = *maxHostConnsFlag
 	}
 
 	if set["subdomain-ports"] {
@@ -797,6 +812,7 @@ func main() {
 		portsPerTarget:  len(ports),
 		rateLimit:       cfg.Scan.RateLimit,
 		workers:         cfg.Scan.Workers,
+		maxHostConns:    cfg.Scan.MaxHostConns,
 		guardMaxTargets: cfg.Scan.MaxTargets,
 		guardMaxPorts:   cfg.Scan.MaxPortsHost,
 		guardMaxDur:     cfg.Scan.MaxDuration,
@@ -900,6 +916,7 @@ func main() {
 	}()
 
 	pool := scanner.NewWorkerPool(cfg.Scan.Workers)
+	hostLimiter := scanner.NewHostLimiter(cfg.Scan.MaxHostConns)
 	var wg sync.WaitGroup
 
 	targetPorts := make(map[string][]int, len(targets))
@@ -978,6 +995,11 @@ func main() {
 				if ctx.Err() != nil {
 					return
 				}
+				releaseHost, err := hostLimiter.Acquire(ctx, target.IP)
+				if err != nil {
+					return
+				}
+				defer releaseHost()
 				if err := limiter.Wait(ctx); err != nil {
 					return
 				}
@@ -1039,6 +1061,11 @@ func main() {
 					if ctx.Err() != nil {
 						return
 					}
+					releaseHost, err := hostLimiter.Acquire(ctx, ip)
+					if err != nil {
+						return
+					}
+					defer releaseHost()
 					if err := limiter.Wait(ctx); err != nil {
 						return
 					}
@@ -1937,6 +1964,7 @@ type scanMetadataInput struct {
 	servicesFound   int64
 	rateLimit       int
 	workers         int
+	maxHostConns    int
 	guardMaxTargets int
 	guardMaxPorts   int
 	guardMaxDur     time.Duration
@@ -1958,6 +1986,7 @@ func buildScanMetadata(startedAt, completedAt time.Time, runErr error, in scanMe
 		ServicesFound:   in.servicesFound,
 		RateLimit:       in.rateLimit,
 		Workers:         in.workers,
+		MaxHostConns:    in.maxHostConns,
 		Guardrails: output.GuardrailsMetadata{
 			MaxTargets:        in.guardMaxTargets,
 			MaxPortsPerTarget: in.guardMaxPorts,

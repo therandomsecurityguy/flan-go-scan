@@ -19,6 +19,9 @@ func TestLoadConfigMissingFileUsesDefaults(t *testing.T) {
 	if cfg.Scan.RateLimit != 200 {
 		t.Fatalf("unexpected default rate limit: %d", cfg.Scan.RateLimit)
 	}
+	if cfg.Scan.MaxHostConns != 0 {
+		t.Fatalf("unexpected default max host conns: %d", cfg.Scan.MaxHostConns)
+	}
 	if cfg.Output.Format != "jsonl" {
 		t.Fatalf("unexpected default output format: %s", cfg.Output.Format)
 	}
@@ -82,6 +85,7 @@ func TestLoadConfigFromFileOverridesDefaults(t *testing.T) {
   timeout: 1s
   rate_limit: 20
   workers: 12
+  max_host_conns: 3
   max_targets: 123
   max_ports_per_target: 456
   max_duration: 7m
@@ -140,6 +144,9 @@ aws:
 	}
 	if cfg.Scan.Workers != 12 {
 		t.Fatalf("expected workers override, got %d", cfg.Scan.Workers)
+	}
+	if cfg.Scan.MaxHostConns != 3 {
+		t.Fatalf("expected max_host_conns override, got %d", cfg.Scan.MaxHostConns)
 	}
 	if cfg.Scan.MaxTargets != 123 {
 		t.Fatalf("expected max_targets override, got %d", cfg.Scan.MaxTargets)
