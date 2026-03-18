@@ -95,6 +95,12 @@ Scan from a file with top 1000 ports:
 flan -l targets.txt --top-ports 1000
 ```
 
+Fingerprint already-open endpoints directly:
+
+```
+flan -t scanme.nmap.org:22 --fingerprint-only
+```
+
 Scan a CIDR range from stdin:
 
 ```
@@ -321,6 +327,7 @@ Common options: AWS_PROFILE=<profile>, aws sso login, or environment credentials
 | `--workers` | Number of concurrent scan workers |
 | `--rate-limit` | Global scan requests per second |
 | `--max-host-conns` | Max concurrent scan connections per host IP (`0` disables) |
+| `--fingerprint-only` | Treat manual input as `host:port` targets and skip host discovery |
 | `-w` | Custom DNS subdomain wordlist |
 | `-r` | Custom DNS resolver (ip:port) |
 | `--cloudflare` | Discover scan targets from Cloudflare zone DNS records |

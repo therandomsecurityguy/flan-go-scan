@@ -82,6 +82,7 @@ func usage() {
 		{"--workers int", "number of concurrent scan workers"},
 		{"--rate-limit int", "global scan requests per second"},
 		{"--max-host-conns int", "max concurrent scan connections per host IP (0 disables)"},
+		{"--fingerprint-only", "treat manual input as host:port targets and skip discovery"},
 		{"-w, -wordlist string", "custom DNS subdomain wordlist file"},
 		{"-r, -resolver string", "custom DNS resolver (ip:port)"},
 		{"--cloudflare", "discover scan targets from Cloudflare zones"},
@@ -276,6 +277,7 @@ func main() {
 	workersFlag := flag.Int("workers", 0, "")
 	rateLimitFlag := flag.Int("rate-limit", 0, "")
 	maxHostConnsFlag := flag.Int("max-host-conns", 0, "")
+	fingerprintOnly := flag.Bool("fingerprint-only", false, "")
 	wordlist := flag.String("wordlist", "", "")
 	wordlistShort := flag.String("w", "", "")
 	resolver := flag.String("resolver", "", "")
@@ -390,6 +392,10 @@ func main() {
 	}
 	cloudflareEnabled := *cloudflareFlag || cfg.Cloudflare.Enabled
 	awsEnabled := *awsFlag || cfg.AWS.Enabled
+	if *fingerprintOnly && (dom != "" || cloudflareEnabled || awsEnabled || *subdomainsOnly) {
+		slog.Error("--fingerprint-only only supports manual -t/-l host:port inputs")
+		os.Exit(1)
+	}
 	if *subdomainsOnly && dom == "" && !cloudflareEnabled && !awsEnabled {
 		slog.Error("--subdomains-only requires -d/--domain, --cloudflare, or --aws")
 		os.Exit(1)
@@ -446,9 +452,10 @@ func main() {
 	}()
 
 	var hosts []string
+	var endpointTargets []scanner.EndpointTarget
 	noTargetsFromDelta := false
 
-	if tgt != "" {
+	if tgt != "" && !*fingerprintOnly {
 		hosts = append(hosts, tgt)
 	}
 	if cloudflareEnabled {
@@ -738,14 +745,41 @@ func main() {
 		}
 	}
 	if tgt == "" && dom == "" && !cloudflareEnabled && !awsEnabled {
-		hosts, err = readHosts(ipsFile)
+		if *fingerprintOnly {
+			var r *os.File
+			if ipsFile == "-" {
+				r = os.Stdin
+			} else {
+				r, err = os.Open(ipsFile)
+				if err != nil {
+					slog.Error("failed to read endpoint targets", "err", err)
+					os.Exit(1)
+				}
+				defer r.Close()
+			}
+			endpointTargets, err = scanner.ParseEndpointTargets(r)
+			if err != nil {
+				slog.Error("failed to read endpoint targets", "err", err)
+				os.Exit(1)
+			}
+		} else {
+			hosts, err = readHosts(ipsFile)
+			if err != nil {
+				slog.Error("failed to read hosts", "err", err)
+				os.Exit(1)
+			}
+		}
+	}
+
+	if *fingerprintOnly && tgt != "" {
+		endpointTargets, err = scanner.ParseEndpointTargets(strings.NewReader(tgt))
 		if err != nil {
-			slog.Error("failed to read hosts", "err", err)
+			slog.Error("invalid fingerprint-only target", "err", err)
 			os.Exit(1)
 		}
 	}
 
-	if len(hosts) == 0 {
+	if len(hosts) == 0 && len(endpointTargets) == 0 {
 		if noTargetsFromDelta {
 			slog.Info("no delta targets to scan")
 			return
@@ -754,13 +788,22 @@ func main() {
 		os.Exit(1)
 	}
 	inputTargets := len(hosts)
-
-	ports, err := selectScanPorts(dom != "", set, *topPorts, portStr, cfg)
-	if err != nil {
-		slog.Error("invalid port configuration", "err", err)
-		os.Exit(1)
+	if *fingerprintOnly {
+		inputTargets = len(endpointTargets)
 	}
-	if err := enforceScanGuardrails(len(hosts), len(ports), cfg); err != nil {
+
+	var ports []int
+	if !*fingerprintOnly {
+		ports, err = selectScanPorts(dom != "", set, *topPorts, portStr, cfg)
+		if err != nil {
+			slog.Error("invalid port configuration", "err", err)
+			os.Exit(1)
+		}
+		if err := enforceScanGuardrails(len(hosts), len(ports), cfg); err != nil {
+			slog.Error("scan blocked by guardrails", "err", err)
+			os.Exit(1)
+		}
+	} else if err := enforceScanGuardrails(len(endpointTargets), 1, cfg); err != nil {
 		slog.Error("scan blocked by guardrails", "err", err)
 		os.Exit(1)
 	}
@@ -789,8 +832,19 @@ func main() {
 		defer jsonlWriter.Close()
 	}
 
-	targets := resolveTargets(ctx, hosts, dnsCache, *asnFlag, cfg.Scan.Timeout, res, cfg.Scan.Workers)
-	if err := enforceScanGuardrails(len(targets), len(ports), cfg); err != nil {
+	resolveInputs := make([]resolveInput, 0, len(hosts)+len(endpointTargets))
+	for _, host := range hosts {
+		resolveInputs = append(resolveInputs, resolveInput{Host: host})
+	}
+	for _, endpoint := range endpointTargets {
+		resolveInputs = append(resolveInputs, resolveInput{Host: endpoint.Host, Port: endpoint.Port})
+	}
+	targets := resolveTargets(ctx, resolveInputs, dnsCache, *asnFlag, cfg.Scan.Timeout, res, cfg.Scan.Workers)
+	guardPorts := len(ports)
+	if *fingerprintOnly {
+		guardPorts = 1
+	}
+	if err := enforceScanGuardrails(len(targets), guardPorts, cfg); err != nil {
 		slog.Error("scan blocked by guardrails after DNS resolution", "err", err)
 		os.Exit(1)
 	}
@@ -798,10 +852,12 @@ func main() {
 
 	tlsVerify := *tlsVerifyFlag
 
-	if cfg.Scan.Discovery && !udpEnabled {
+	if cfg.Scan.Discovery && !udpEnabled && !*fingerprintOnly {
 		targets = discoverAliveTargets(ctx, targets, ports, cfg.Scan.Workers, cfg.Scan.Timeout)
-	} else if cfg.Scan.Discovery && udpEnabled {
+	} else if cfg.Scan.Discovery && udpEnabled && !*fingerprintOnly {
 		slog.Info("skipping discovery filter for UDP mode to avoid dropping UDP-only hosts", "targets", len(targets))
+	} else if *fingerprintOnly {
+		slog.Info("skipping discovery filter for fingerprint-only mode", "targets", len(targets))
 	}
 	aliveTargets := len(targets)
 	metaInput := scanMetadataInput{
@@ -809,7 +865,7 @@ func main() {
 		inputTargets:    inputTargets,
 		resolvedTargets: resolvedTargets,
 		aliveTargets:    aliveTargets,
-		portsPerTarget:  len(ports),
+		portsPerTarget:  guardPorts,
 		rateLimit:       cfg.Scan.RateLimit,
 		workers:         cfg.Scan.Workers,
 		maxHostConns:    cfg.Scan.MaxHostConns,
@@ -933,17 +989,23 @@ func main() {
 		cdn := cdnHosts[target.IP]
 		targetKey := target.CheckpointKey
 		hostPorts := make([]int, 0, len(ports))
-		for _, port := range ports {
-			if ctx.Err() != nil {
-				break
+		if *fingerprintOnly {
+			if target.Port > 0 && !checkpoint.ShouldSkip(targetKey, target.Port) {
+				hostPorts = append(hostPorts, target.Port)
 			}
-			if cdn != "" && !*scanCDN && !cdnSkipPorts[port] {
-				continue
+		} else {
+			for _, port := range ports {
+				if ctx.Err() != nil {
+					break
+				}
+				if cdn != "" && !*scanCDN && !cdnSkipPorts[port] {
+					continue
+				}
+				if checkpoint.ShouldSkip(targetKey, port) {
+					continue
+				}
+				hostPorts = append(hostPorts, port)
 			}
-			if checkpoint.ShouldSkip(targetKey, port) {
-				continue
-			}
-			hostPorts = append(hostPorts, port)
 		}
 		if len(hostPorts) == 0 {
 			progress.HostsDone.Add(1)
@@ -1454,15 +1516,21 @@ func portsForSubdomainProfile(profile string) ([]int, error) {
 type scanTarget struct {
 	Hostname      string
 	IP            string
+	Port          int
 	ASN           string
 	Org           string
 	PTR           string
 	CheckpointKey string
 }
 
+type resolveInput struct {
+	Host string
+	Port int
+}
+
 func resolveTargets(
 	ctx context.Context,
-	hosts []string,
+	inputs []resolveInput,
 	dnsCache *dns.DNSCache,
 	asnEnabled bool,
 	timeout time.Duration,
@@ -1472,8 +1540,8 @@ func resolveTargets(
 	if workers <= 0 {
 		workers = 1
 	}
-	if workers > len(hosts) {
-		workers = len(hosts)
+	if workers > len(inputs) {
+		workers = len(inputs)
 	}
 	if workers == 0 {
 		return nil
@@ -1510,18 +1578,18 @@ func resolveTargets(
 		return value.(ipMetadata)
 	}
 
-	hostCh := make(chan string, workers)
+	inputCh := make(chan resolveInput, workers)
 	targetCh := make(chan scanTarget, workers*4)
 	var workersWg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		workersWg.Add(1)
 		go func() {
 			defer workersWg.Done()
-			for rawHost := range hostCh {
+			for input := range inputCh {
 				if ctx.Err() != nil {
 					return
 				}
-				host := strings.TrimSpace(rawHost)
+				host := strings.TrimSpace(input.Host)
 				if host == "" {
 					continue
 				}
@@ -1541,6 +1609,7 @@ func resolveTargets(
 					target := scanTarget{
 						Hostname:      hostname,
 						IP:            ipStr,
+						Port:          input.Port,
 						CheckpointKey: targetCheckpointKey(hostname, ipStr),
 					}
 					if asnEnabled {
@@ -1561,29 +1630,36 @@ func resolveTargets(
 	}
 
 sendLoop:
-	for _, host := range hosts {
+	for _, input := range inputs {
 		select {
 		case <-ctx.Done():
 			break sendLoop
-		case hostCh <- host:
+		case inputCh <- input:
 		}
 	}
-	close(hostCh)
+	close(inputCh)
 	go func() {
 		workersWg.Wait()
 		close(targetCh)
 	}()
 
 	seen := make(map[string]struct{})
-	targets := make([]scanTarget, 0, len(hosts))
+	targets := make([]scanTarget, 0, len(inputs))
 	for target := range targetCh {
-		if _, exists := seen[target.CheckpointKey]; exists {
+		key := target.CheckpointKey
+		if target.Port > 0 {
+			key = fmt.Sprintf("%s:%d", key, target.Port)
+		}
+		if _, exists := seen[key]; exists {
 			continue
 		}
-		seen[target.CheckpointKey] = struct{}{}
+		seen[key] = struct{}{}
 		targets = append(targets, target)
 	}
 	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].CheckpointKey == targets[j].CheckpointKey {
+			return targets[i].Port < targets[j].Port
+		}
 		return targets[i].CheckpointKey < targets[j].CheckpointKey
 	})
 	return targets

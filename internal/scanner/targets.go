@@ -6,8 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 )
+
+type EndpointTarget struct {
+	Host string
+	Port int
+}
 
 func ParseTargets(r io.Reader) ([]string, error) {
 	var targets []string
@@ -34,6 +40,58 @@ func ParseTargets(r io.Reader) ([]string, error) {
 	}
 
 	return targets, s.Err()
+}
+
+func ParseEndpointTargets(r io.Reader) ([]EndpointTarget, error) {
+	var targets []EndpointTarget
+	seen := make(map[string]bool)
+	s := bufio.NewScanner(r)
+
+	for s.Scan() {
+		line := strings.TrimSpace(s.Text())
+		if line == "" {
+			continue
+		}
+
+		host, port, err := splitEndpointTarget(line)
+		if err != nil {
+			return nil, fmt.Errorf("invalid target %q: %w", line, err)
+		}
+		key := normalizedEndpointKey(host, port)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		targets = append(targets, EndpointTarget{Host: host, Port: port})
+	}
+
+	return targets, s.Err()
+}
+
+func splitEndpointTarget(target string) (string, int, error) {
+	host, portStr, err := net.SplitHostPort(target)
+	if err != nil {
+		return "", 0, err
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid port %q: %w", portStr, err)
+	}
+	if port < 1 || port > 65535 {
+		return "", 0, fmt.Errorf("port out of range: %d", port)
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return "", 0, fmt.Errorf("empty host")
+	}
+	if net.ParseIP(host) == nil {
+		host = strings.TrimSuffix(strings.ToLower(host), ".")
+	}
+	return host, port, nil
+}
+
+func normalizedEndpointKey(host string, port int) string {
+	return net.JoinHostPort(host, strconv.Itoa(port))
 }
 
 func expandTarget(target string) ([]string, error) {
