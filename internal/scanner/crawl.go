@@ -26,10 +26,11 @@ type CrawlResult struct {
 }
 
 type AppFingerprint struct {
-	Server    string   `json:"server,omitempty"`
-	PoweredBy string   `json:"powered_by,omitempty"`
-	Generator string   `json:"generator,omitempty"`
-	Apps      []string `json:"apps,omitempty"`
+	Server    string               `json:"server,omitempty"`
+	PoweredBy string               `json:"powered_by,omitempty"`
+	Generator string               `json:"generator,omitempty"`
+	Apps      []string             `json:"apps,omitempty"`
+	Products  []ProductFingerprint `json:"products,omitempty"`
 }
 
 var sensitivePaths = []string{
@@ -43,6 +44,7 @@ var sensitivePaths = []string{
 	"/api", "/api/v1", "/api/v2", "/api/docs",
 	"/swagger", "/swagger-ui", "/swagger-ui.html", "/swagger.json", "/openapi.json",
 	"/graphql", "/graphiql",
+	"/version", "/readyz", "/livez", "/api", "/apis",
 	"/debug/pprof", "/__debug__/",
 	"/wp-login.php", "/wp-admin/", "/wp-content/", "/wp-includes/", "/xmlrpc.php", "/wp-json/",
 	"/administrator/", "/components/", "/templates/",
@@ -85,6 +87,8 @@ var sensitivePaths = []string{
 	"/roundcube/", "/webmail/", "/zimbra/", "/owa/",
 	"/cpanel", "/whm", "/plesk/", "/directadmin/",
 	"/session_login.cgi",
+	"/remote/login", "/remote/fgt_lang", "/+CSCOE+/logon.html", "/my.policy", "/tmui/login.jsp",
+	"/ui/", "/login.html", "/app/rest/server",
 	"/_cat/health", "/_nodes", "/solr/",
 }
 
@@ -206,7 +210,74 @@ var cookieTech = map[string]string{
 	"connect.sid":  "Node.js/Express",
 }
 
+var productProbePaths = []string{
+	"/",
+	"/graphql",
+	"/version",
+	"/api",
+	"/apis",
+	"/readyz",
+	"/livez",
+	"/v1/sys/health",
+	"/v1/agent/self",
+	"/-/healthy",
+	"/_cat/health",
+	"/_nodes",
+	"/grafana/login",
+	"/artifactory/",
+	"/jfrog/",
+	"/remote/login",
+	"/tmui/login.jsp",
+	"/my.policy",
+	"/+CSCOE+/logon.html",
+	"/login.html",
+	"/app/rest/server",
+	"/ui/",
+}
+
 func Crawl(ctx context.Context, scheme, ip, hostname string, port int, maxDepth int, timeout time.Duration, reqDelay time.Duration, verifyTLS bool) ([]CrawlResult, *AppFingerprint) {
+	return crawlHTTP(ctx, scheme, ip, hostname, port, maxDepth, timeout, reqDelay, verifyTLS, true)
+}
+
+func FingerprintHTTP(ctx context.Context, scheme, ip, hostname string, port int, timeout time.Duration, verifyTLS bool) *AppFingerprint {
+	_, fp := crawlHTTP(ctx, scheme, ip, hostname, port, 0, timeout, 0, verifyTLS, false)
+	return fp
+}
+
+func MergeAppFingerprints(base, extra *AppFingerprint) *AppFingerprint {
+	if base == nil {
+		return extra
+	}
+	if extra == nil {
+		return base
+	}
+	if base.Server == "" {
+		base.Server = extra.Server
+	}
+	if base.PoweredBy == "" {
+		base.PoweredBy = extra.PoweredBy
+	}
+	if base.Generator == "" {
+		base.Generator = extra.Generator
+	}
+	appsFound := make(map[string]bool, len(base.Apps))
+	for _, app := range base.Apps {
+		appsFound[app] = true
+	}
+	for _, app := range extra.Apps {
+		addApp(base, appsFound, app)
+	}
+	productsFound := make(map[string]string, len(base.Products))
+	for _, product := range base.Products {
+		productsFound[product.Name] = product.Confidence
+	}
+	for _, product := range extra.Products {
+		addProduct(base, productsFound, product.Name, product.Confidence)
+	}
+	return base
+}
+
+func crawlHTTP(ctx context.Context, scheme, ip, hostname string, port int, maxDepth int, timeout time.Duration, reqDelay time.Duration, verifyTLS bool, followLinks bool) ([]CrawlResult, *AppFingerprint) {
 	displayHost := ip
 	if strings.Contains(ip, ":") {
 		displayHost = "[" + ip + "]"
@@ -238,14 +309,21 @@ func Crawl(ctx context.Context, scheme, ip, hostname string, port int, maxDepth 
 
 	visited := make(map[string]bool)
 	appsFound := make(map[string]bool)
+	productsFound := make(map[string]string)
 	fp := &AppFingerprint{}
 	var results []CrawlResult
 
-	queue := make([]entry, 0, len(sensitivePaths)+1)
-	for _, p := range sensitivePaths {
+	paths := sensitivePaths
+	if !followLinks {
+		paths = productProbePaths
+	}
+	queue := make([]entry, 0, len(paths)+1)
+	for _, p := range paths {
 		queue = append(queue, entry{p, 0})
 	}
-	queue = append(queue, entry{"/", 0})
+	if len(paths) == 0 || paths[0] != "/" {
+		queue = append(queue, entry{"/", 0})
+	}
 	head := 0
 
 	var timer *time.Timer
@@ -271,7 +349,7 @@ func Crawl(ctx context.Context, scheme, ip, hostname string, port int, maxDepth 
 			timer.Reset(reqDelay)
 			select {
 			case <-ctx.Done():
-				if fp.Server == "" && fp.PoweredBy == "" && fp.Generator == "" && len(fp.Apps) == 0 {
+				if appFingerprintEmpty(fp) {
 					return results, nil
 				}
 				return results, fp
@@ -279,7 +357,7 @@ func Crawl(ctx context.Context, scheme, ip, hostname string, port int, maxDepth 
 			}
 		}
 
-		cr, body := fetchPath(ctx, client, base, hostname, e.path, fp, appsFound)
+		cr, body := fetchPath(ctx, client, base, hostname, e.path, fp, appsFound, productsFound)
 		if cr == nil {
 			continue
 		}
@@ -302,7 +380,7 @@ func Crawl(ctx context.Context, scheme, ip, hostname string, port int, maxDepth 
 			}
 		}
 
-		if e.depth < maxDepth && strings.Contains(cr.ContentType, "text/html") && body != "" && cr.StatusCode < 400 {
+		if followLinks && e.depth < maxDepth && strings.Contains(cr.ContentType, "text/html") && body != "" && cr.StatusCode < 400 {
 			for _, link := range extractLinks(body, base) {
 				if !visited[link] {
 					queue = append(queue, entry{link, e.depth + 1})
@@ -311,7 +389,7 @@ func Crawl(ctx context.Context, scheme, ip, hostname string, port int, maxDepth 
 		}
 	}
 
-	if fp.Server == "" && fp.PoweredBy == "" && fp.Generator == "" && len(fp.Apps) == 0 {
+	if appFingerprintEmpty(fp) {
 		return results, nil
 	}
 	return results, fp
@@ -324,7 +402,7 @@ func addApp(fp *AppFingerprint, found map[string]bool, tech string) {
 	}
 }
 
-func fetchPath(ctx context.Context, client *http.Client, base, hostname, path string, fp *AppFingerprint, appsFound map[string]bool) (*CrawlResult, string) {
+func fetchPath(ctx context.Context, client *http.Client, base, hostname, path string, fp *AppFingerprint, appsFound map[string]bool, productsFound map[string]string) (*CrawlResult, string) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
 	if err != nil {
 		return nil, ""
@@ -396,8 +474,96 @@ func fetchPath(ctx context.Context, client *http.Client, base, hostname, path st
 	if strings.Contains(cr.ContentType, "text/html") {
 		cr.Title = extractTitle(body)
 	}
+	detectDeeperProduct(path, cr, resp.Header, body, fp, productsFound)
 
 	return cr, body
+}
+
+func appFingerprintEmpty(fp *AppFingerprint) bool {
+	return fp.Server == "" && fp.PoweredBy == "" && fp.Generator == "" && len(fp.Apps) == 0 && len(fp.Products) == 0
+}
+
+func addProduct(fp *AppFingerprint, found map[string]string, name, confidence string) {
+	if name == "" {
+		return
+	}
+	current, ok := found[name]
+	if ok && productConfidenceRank(current) >= productConfidenceRank(confidence) {
+		return
+	}
+	found[name] = confidence
+	for i := range fp.Products {
+		if fp.Products[i].Name == name {
+			fp.Products[i].Confidence = confidence
+			return
+		}
+	}
+	fp.Products = append(fp.Products, ProductFingerprint{Name: name, Confidence: confidence})
+}
+
+func productConfidenceRank(confidence string) int {
+	switch strings.ToLower(confidence) {
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func detectDeeperProduct(path string, cr *CrawlResult, headers http.Header, body string, fp *AppFingerprint, productsFound map[string]string) {
+	server := strings.ToLower(fp.Server)
+	poweredBy := strings.ToLower(fp.PoweredBy)
+	generator := strings.ToLower(fp.Generator)
+	title := strings.ToLower(cr.Title)
+	bodyLower := strings.ToLower(body)
+	statusOK := cr.StatusCode > 0 && cr.StatusCode < 500
+
+	switch {
+	case headers.Get("X-JFrog-Version") != "" || headers.Get("X-Artifactory-Id") != "" || strings.Contains(bodyLower, "artifactory"):
+		addProduct(fp, productsFound, "Artifactory", "high")
+	case strings.EqualFold(headers.Get("X-Elastic-Product"), "Elasticsearch") || strings.Contains(bodyLower, "\"cluster_name\"") || path == "/_cat/health" || path == "/_nodes":
+		addProduct(fp, productsFound, "Elasticsearch", "high")
+	case strings.Contains(title, "grafana") || strings.Contains(bodyLower, "grafana") || strings.Contains(path, "/grafana/"):
+		addProduct(fp, productsFound, "Grafana", "high")
+	case strings.Contains(bodyLower, "hashicorp vault") || strings.Contains(bodyLower, "\"sealed\"") && strings.Contains(path, "/v1/sys/health"):
+		addProduct(fp, productsFound, "Vault", "high")
+	case strings.Contains(bodyLower, "\"config\"") && strings.Contains(path, "/v1/agent/self") || strings.Contains(bodyLower, "\"datacenter\"") && strings.Contains(bodyLower, "\"revision\""):
+		addProduct(fp, productsFound, "Consul", "high")
+	case strings.Contains(title, "prometheus") || path == "/-/healthy" || strings.Contains(bodyLower, "prometheus time series collection"):
+		addProduct(fp, productsFound, "Prometheus", "high")
+	case strings.Contains(server, "fortigate") || strings.Contains(title, "fortigate") || strings.Contains(bodyLower, "fortinet"):
+		addProduct(fp, productsFound, "FortiGate", "medium")
+	case strings.Contains(server, "big-ip") || strings.Contains(title, "big-ip") || strings.Contains(bodyLower, "f5 networks"):
+		addProduct(fp, productsFound, "BigIP", "medium")
+	case strings.Contains(title, "cisco") && strings.Contains(bodyLower, "anyconnect") || strings.Contains(bodyLower, "ssl vpn service") && strings.Contains(bodyLower, "cisco"):
+		addProduct(fp, productsFound, "AnyConnect", "medium")
+	case strings.Contains(title, "teamcity") || headers.Get("TeamCity-Node-Id") != "" || strings.Contains(bodyLower, "teamcity"):
+		addProduct(fp, productsFound, "TeamCity", "high")
+	case path == "/version" && strings.Contains(bodyLower, "etcdserver") || strings.Contains(bodyLower, "etcdcluster"):
+		addProduct(fp, productsFound, "etcd", "high")
+	case path == "/version" && strings.Contains(bodyLower, "\"major\"") && strings.Contains(bodyLower, "\"minor\""):
+		addProduct(fp, productsFound, "Kubernetes", "high")
+	case statusOK && (headers.Get("Audit-Id") != "" || headers.Get("X-Kubernetes-Pf-Flowschema-Uid") != "" || headers.Get("X-Kubernetes-Pf-Prioritylevel-Uid") != ""):
+		addProduct(fp, productsFound, "Kubernetes", "medium")
+	case statusOK && (path == "/api" || path == "/apis" || path == "/readyz" || path == "/livez") && strings.Contains(bodyLower, "kubernetes"):
+		addProduct(fp, productsFound, "Kubernetes", "medium")
+	case strings.Contains(generator, "grafana"):
+		addProduct(fp, productsFound, "Grafana", "medium")
+	case strings.Contains(generator, "teamcity"):
+		addProduct(fp, productsFound, "TeamCity", "medium")
+	case strings.Contains(poweredBy, "artifactory"):
+		addProduct(fp, productsFound, "Artifactory", "medium")
+	case path == "/graphql" && (strings.Contains(bodyLower, "graphql") || strings.Contains(strings.ToLower(headers.Get("Content-Type")), "graphql")):
+		addProduct(fp, productsFound, "GraphQL", "high")
+	case strings.Contains(bodyLower, "__schema") || strings.Contains(bodyLower, "must provide query string") || strings.Contains(bodyLower, "graphql"):
+		if path == "/" || path == "/graphql" {
+			addProduct(fp, productsFound, "GraphQL", "medium")
+		}
+	}
 }
 
 func extractLinks(body, base string) []string {

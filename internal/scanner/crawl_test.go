@@ -160,3 +160,92 @@ func TestCrawlUsesProvidedHostHeader(t *testing.T) {
 	}
 	t.Fatalf("expected / to be fetched with status 200, got %+v", results)
 }
+
+func TestDetectDeeperProduct(t *testing.T) {
+	fp := &AppFingerprint{}
+	products := make(map[string]string)
+
+	detectDeeperProduct(
+		"/",
+		&CrawlResult{Path: "/", StatusCode: http.StatusOK, Title: "Grafana"},
+		http.Header{},
+		"<html>grafana</html>",
+		fp,
+		products,
+	)
+	detectDeeperProduct(
+		"/_cat/health",
+		&CrawlResult{Path: "/_cat/health", StatusCode: http.StatusOK},
+		http.Header{"X-Elastic-Product": []string{"Elasticsearch"}},
+		`{"cluster_name":"prod-search"}`,
+		fp,
+		products,
+	)
+
+	got := make(map[string]string, len(fp.Products))
+	for _, product := range fp.Products {
+		got[product.Name] = product.Confidence
+	}
+	if got["Grafana"] != "high" {
+		t.Fatalf("expected Grafana high confidence, got %+v", fp.Products)
+	}
+	if got["Elasticsearch"] != "high" {
+		t.Fatalf("expected Elasticsearch high confidence, got %+v", fp.Products)
+	}
+}
+
+func TestDetectDeeperProductGraphQL(t *testing.T) {
+	fp := &AppFingerprint{}
+	products := make(map[string]string)
+
+	detectDeeperProduct(
+		"/graphql",
+		&CrawlResult{Path: "/graphql", StatusCode: http.StatusBadRequest},
+		http.Header{"Content-Type": []string{"application/graphql-response+json"}},
+		`{"errors":[{"message":"must provide query string"}]}`,
+		fp,
+		products,
+	)
+
+	for _, product := range fp.Products {
+		if product.Name == "GraphQL" {
+			return
+		}
+	}
+	t.Fatalf("expected GraphQL product, got %+v", fp.Products)
+}
+
+func TestMergeAppFingerprints(t *testing.T) {
+	base := &AppFingerprint{
+		Server:   "nginx",
+		Apps:     []string{"Grafana"},
+		Products: []ProductFingerprint{{Name: "Grafana", Confidence: "medium"}},
+	}
+	extra := &AppFingerprint{
+		PoweredBy: "Go",
+		Apps:      []string{"Prometheus"},
+		Products: []ProductFingerprint{
+			{Name: "Grafana", Confidence: "high"},
+			{Name: "Prometheus", Confidence: "high"},
+		},
+	}
+
+	got := MergeAppFingerprints(base, extra)
+	if got.PoweredBy != "Go" {
+		t.Fatalf("expected powered_by merge, got %+v", got)
+	}
+	if len(got.Apps) != 2 {
+		t.Fatalf("expected merged apps, got %+v", got.Apps)
+	}
+
+	products := make(map[string]string, len(got.Products))
+	for _, product := range got.Products {
+		products[product.Name] = product.Confidence
+	}
+	if products["Grafana"] != "high" {
+		t.Fatalf("expected Grafana confidence upgrade, got %+v", got.Products)
+	}
+	if products["Prometheus"] != "high" {
+		t.Fatalf("expected Prometheus merge, got %+v", got.Products)
+	}
+}

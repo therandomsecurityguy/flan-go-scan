@@ -1310,19 +1310,28 @@ func printResult(res scanner.ScanResult) {
 		fmt.Printf("  %smeta%s  %s\n", cyan, reset, strings.Join(meta, "  ·  "))
 	}
 
-	if res.App != nil {
+	if len(res.Products) > 0 || res.App != nil {
 		var parts []string
-		if res.App.Server != "" {
-			parts = append(parts, res.App.Server)
+		for _, product := range res.Products {
+			if product.Confidence != "" {
+				parts = append(parts, product.Name+" ("+strings.ToLower(product.Confidence)+")")
+			} else {
+				parts = append(parts, product.Name)
+			}
 		}
-		if res.App.PoweredBy != "" {
-			parts = append(parts, res.App.PoweredBy)
-		}
-		if res.App.Generator != "" {
-			parts = append(parts, res.App.Generator)
-		}
-		if len(res.App.Apps) > 0 {
-			parts = append(parts, strings.Join(res.App.Apps, ", "))
+		if res.App != nil {
+			if res.App.Server != "" {
+				parts = append(parts, res.App.Server)
+			}
+			if res.App.PoweredBy != "" {
+				parts = append(parts, res.App.PoweredBy)
+			}
+			if res.App.Generator != "" {
+				parts = append(parts, res.App.Generator)
+			}
+			if len(res.App.Apps) > 0 {
+				parts = append(parts, strings.Join(res.App.Apps, ", "))
+			}
 		}
 		if len(parts) > 0 {
 			fmt.Printf("  %sapp%s  %s\n", cyan, reset, strings.Join(parts, "  ·  "))
@@ -1845,9 +1854,19 @@ func scanTCPPort(
 
 	var endpoints []scanner.CrawlResult
 	var appFP *scanner.AppFingerprint
-	if opts.crawl && scanner.IsHTTPService(service, port, hasTLS) {
-		endpoints, appFP = scanner.Crawl(ctx, scanner.HTTPScheme(hasTLS), ip, hostname, port, cfg.Scan.CrawlDepth, cfg.Scan.Timeout, 100*time.Millisecond, opts.tlsVerify)
+	if scanner.IsHTTPService(service, port, hasTLS) {
+		appFP = scanner.FingerprintHTTP(ctx, scanner.HTTPScheme(hasTLS), ip, hostname, port, cfg.Scan.Timeout, opts.tlsVerify)
 	}
+	if opts.crawl && scanner.IsHTTPService(service, port, hasTLS) {
+		var crawlFP *scanner.AppFingerprint
+		endpoints, crawlFP = scanner.Crawl(ctx, scanner.HTTPScheme(hasTLS), ip, hostname, port, cfg.Scan.CrawlDepth, cfg.Scan.Timeout, 100*time.Millisecond, opts.tlsVerify)
+		appFP = scanner.MergeAppFingerprints(appFP, crawlFP)
+	}
+	var products []scanner.ProductFingerprint
+	if appFP != nil {
+		products = scanner.MergeProductFingerprints(products, appFP.Products)
+	}
+	products = scanner.MergeProductFingerprints(products, scanner.DetectServiceProducts(service, version, banner, metadata, port, protocol))
 
 	var secHeaders []scanner.HeaderFinding
 	if scanner.IsHTTPService(service, port, hasTLS) {
@@ -1871,6 +1890,7 @@ func scanTCPPort(
 		Metadata:        metadata,
 		Endpoints:       endpoints,
 		App:             appFP,
+		Products:        products,
 		SecurityHeaders: secHeaders,
 		TLSEnum:         tlsEnum,
 		Hostname:        hostname,
