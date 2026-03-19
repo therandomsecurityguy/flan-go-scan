@@ -5,6 +5,138 @@ import (
 	"strings"
 )
 
+type productMatcher struct {
+	product  string
+	patterns []string
+	ports    []int
+}
+
+var serviceMatchers = []productMatcher{
+	{product: "PostgreSQL", patterns: []string{"postgres"}},
+	{product: "MySQL", patterns: []string{"mysql"}},
+	{product: "MSSQL", patterns: []string{"mssql", "sqlserver"}},
+	{product: "Oracle", patterns: []string{"oracle"}},
+	{product: "MongoDB", patterns: []string{"mongo"}},
+	{product: "Redis", patterns: []string{"redis"}},
+	{product: "Cassandra", patterns: []string{"cassandra"}},
+	{product: "InfluxDB", patterns: []string{"influx"}},
+	{product: "Neo4j", patterns: []string{"neo4j"}},
+	{product: "DB2", patterns: []string{"db2"}},
+	{product: "Sybase", patterns: []string{"sybase"}},
+	{product: "Firebird", patterns: []string{"firebird"}},
+	{product: "Memcached", patterns: []string{"memcached"}},
+	{product: "ZooKeeper", patterns: []string{"zookeeper"}},
+	{product: "CouchDB", patterns: []string{"couchdb"}},
+	{product: "ArangoDB", patterns: []string{"arangodb"}},
+	{product: "Milvus", patterns: []string{"milvus"}},
+	{product: "ChromaDB", patterns: []string{"chromadb", "chroma"}},
+	{product: "Pinecone", patterns: []string{"pinecone"}},
+	{product: "LDAP", patterns: []string{"ldap"}},
+	{product: "SMB", patterns: []string{"smb"}},
+	{product: "VNC", patterns: []string{"vnc"}},
+	{product: "SMTP", patterns: []string{"smtp"}},
+	{product: "POP3", patterns: []string{"pop3"}},
+	{product: "OpenVPN", patterns: []string{"openvpn"}},
+	{product: "IPsec", patterns: []string{"ike", "isakmp", "ipsec"}},
+}
+
+var bannerMatchers = []productMatcher{
+	{product: "PostgreSQL", patterns: []string{"postgresql"}},
+	{product: "MySQL", patterns: []string{"mysql"}},
+	{product: "MSSQL", patterns: []string{"microsoft sql server"}},
+	{product: "Oracle", patterns: []string{"oracle"}},
+	{product: "MongoDB", patterns: []string{"mongodb"}},
+	{product: "Redis", patterns: []string{"redis"}},
+	{product: "Cassandra", patterns: []string{"cassandra"}},
+	{product: "InfluxDB", patterns: []string{"influxdb"}},
+	{product: "Neo4j", patterns: []string{"neo4j"}},
+	{product: "DB2", patterns: []string{"db2"}},
+	{product: "Sybase", patterns: []string{"sybase"}},
+	{product: "Firebird", patterns: []string{"firebird"}},
+	{product: "Memcached", patterns: []string{"memcached"}},
+	{product: "ZooKeeper", patterns: []string{"zookeeper"}},
+	{product: "CouchDB", patterns: []string{"couchdb"}},
+	{product: "ArangoDB", patterns: []string{"arangodb"}},
+	{product: "Milvus", patterns: []string{"milvus"}},
+	{product: "ChromaDB", patterns: []string{"chromadb", "chroma"}},
+	{product: "Pinecone", patterns: []string{"pinecone"}},
+	{product: "LDAP", patterns: []string{"ldap"}},
+	{product: "SMB", patterns: []string{"smb"}},
+	{product: "VNC", patterns: []string{"rfb "}},
+	{product: "SMTP", patterns: []string{"220 ", "esmtp"}, ports: []int{25, 465, 587}},
+	{product: "POP3", patterns: []string{"+ok"}, ports: []int{110, 995}},
+	{product: "OpenVPN", patterns: []string{"openvpn"}},
+	{product: "IPsec", patterns: []string{"ikev2", "isakmp", "ipsec"}},
+}
+
+var versionMatchers = []productMatcher{
+	{product: "PostgreSQL", patterns: []string{"postgres"}},
+	{product: "MySQL", patterns: []string{"mysql"}},
+	{product: "Oracle", patterns: []string{"oracle"}},
+	{product: "MongoDB", patterns: []string{"mongo"}},
+	{product: "Redis", patterns: []string{"redis"}},
+	{product: "CouchDB", patterns: []string{"couchdb"}},
+	{product: "ArangoDB", patterns: []string{"arangodb"}},
+	{product: "Milvus", patterns: []string{"milvus"}},
+	{product: "ChromaDB", patterns: []string{"chroma"}},
+}
+
+var metadataMatchers = []productMatcher{
+	{product: "PostgreSQL", patterns: []string{"postgres"}},
+	{product: "MySQL", patterns: []string{"mysql"}},
+	{product: "MSSQL", patterns: []string{"mssql", "sqlserver", "sql server"}},
+	{product: "Oracle", patterns: []string{"oracle"}},
+	{product: "MongoDB", patterns: []string{"mongo"}},
+	{product: "Redis", patterns: []string{"redis"}},
+	{product: "Cassandra", patterns: []string{"cassandra"}},
+	{product: "InfluxDB", patterns: []string{"influx"}},
+	{product: "Neo4j", patterns: []string{"neo4j"}},
+	{product: "DB2", patterns: []string{"db2"}},
+	{product: "Sybase", patterns: []string{"sybase"}},
+	{product: "Firebird", patterns: []string{"firebird"}},
+	{product: "Memcached", patterns: []string{"memcached"}},
+	{product: "ZooKeeper", patterns: []string{"zookeeper"}},
+	{product: "CouchDB", patterns: []string{"couchdb"}},
+	{product: "ArangoDB", patterns: []string{"arangodb"}},
+	{product: "Milvus", patterns: []string{"milvus"}},
+	{product: "ChromaDB", patterns: []string{"chromadb", "chroma"}},
+	{product: "Pinecone", patterns: []string{"pinecone"}},
+	{product: "LDAP", patterns: []string{"ldap"}},
+	{product: "SMB", patterns: []string{"smb"}},
+	{product: "VNC", patterns: []string{"rfb"}},
+	{product: "SMTP", patterns: []string{"esmtp"}},
+	{product: "POP3", patterns: []string{"pop3"}},
+	{product: "OpenVPN", patterns: []string{"openvpn"}},
+	{product: "IPsec", patterns: []string{"ikev2", "isakmp", "ipsec"}},
+}
+
+var cpeMatchers = []productMatcher{
+	{product: "PostgreSQL", patterns: []string{":postgresql:"}},
+	{product: "MySQL", patterns: []string{":mysql:"}},
+	{product: "Oracle", patterns: []string{":oracle:"}},
+	{product: "MongoDB", patterns: []string{":mongodb:"}},
+	{product: "Redis", patterns: []string{":redis:"}},
+	{product: "Cassandra", patterns: []string{":cassandra:"}},
+	{product: "InfluxDB", patterns: []string{":influxdb:"}},
+	{product: "Neo4j", patterns: []string{":neo4j:"}},
+	{product: "DB2", patterns: []string{":db2:"}},
+	{product: "Sybase", patterns: []string{":sybase:"}},
+	{product: "Firebird", patterns: []string{":firebird:"}},
+	{product: "Memcached", patterns: []string{":memcached:"}},
+	{product: "ZooKeeper", patterns: []string{":zookeeper:"}},
+	{product: "CouchDB", patterns: []string{":couchdb:"}},
+	{product: "ArangoDB", patterns: []string{":arangodb:"}},
+	{product: "Milvus", patterns: []string{":milvus:"}},
+	{product: "ChromaDB", patterns: []string{":chromadb:", ":chroma:"}},
+	{product: "Pinecone", patterns: []string{":pinecone:"}},
+	{product: "LDAP", patterns: []string{":openldap:", ":ldap"}},
+	{product: "SMB", patterns: []string{":samba:", ":smb"}},
+	{product: "VNC", patterns: []string{":realvnc:", ":vnc"}},
+	{product: "SMTP", patterns: []string{":postfix:", ":exim:", ":sendmail:"}},
+	{product: "POP3", patterns: []string{":dovecot:", ":courier:", ":pop3"}},
+	{product: "OpenVPN", patterns: []string{":openvpn:"}},
+}
+
 func MergeProductFingerprints(groups ...[]ProductFingerprint) []ProductFingerprint {
 	found := make(map[string]int)
 	var merged []ProductFingerprint
@@ -32,180 +164,68 @@ func DetectServiceProducts(service, version, banner string, metadata []byte, por
 	versionLower := strings.ToLower(version)
 	bannerLower := strings.ToLower(banner)
 	proto := strings.ToLower(protocol)
+	metaText := strings.ToLower(string(metadata))
 
 	var products []ProductFingerprint
 	add := func(name, confidence string) {
 		products = MergeProductFingerprints(products, []ProductFingerprint{{Name: name, Confidence: confidence}})
 	}
 
-	switch {
-	case strings.Contains(svc, "postgres"):
-		add("PostgreSQL", "high")
-	case svc == "mysql":
-		add("MySQL", "high")
-	case strings.Contains(svc, "mssql") || strings.Contains(svc, "sqlserver"):
-		add("MSSQL", "high")
-	case strings.Contains(svc, "oracle"):
-		add("Oracle", "high")
-	case strings.Contains(svc, "mongo"):
-		add("MongoDB", "high")
-	case svc == "redis":
-		add("Redis", "high")
-	case strings.Contains(svc, "cassandra"):
-		add("Cassandra", "high")
-	case strings.Contains(svc, "influx"):
-		add("InfluxDB", "high")
-	case strings.Contains(svc, "neo4j"):
-		add("Neo4j", "high")
-	case strings.Contains(svc, "memcached"):
-		add("Memcached", "high")
-	case strings.Contains(svc, "zookeeper"):
-		add("ZooKeeper", "high")
-	case strings.Contains(svc, "ldap"):
-		add("LDAP", "high")
-	case svc == "vnc":
-		add("VNC", "high")
-	case svc == "smtp":
-		add("SMTP", "high")
-	case svc == "pop3":
-		add("POP3", "high")
-	case strings.Contains(svc, "ike") || strings.Contains(svc, "isakmp") || strings.Contains(svc, "ipsec"):
-		add("IPsec", "high")
-	}
+	applyProductMatchers(svc, port, serviceMatchers, "high", add)
+	applyProductMatchers(bannerLower, port, bannerMatchers, "medium", add)
+	applyProductMatchers(versionLower, port, versionMatchers, "low", add)
+	applyProductMatchers(metaText, port, metadataMatchers, "medium", add)
 
-	switch {
-	case strings.Contains(bannerLower, "postgresql"):
-		add("PostgreSQL", "medium")
-	case strings.Contains(bannerLower, "mysql"):
-		add("MySQL", "medium")
-	case strings.Contains(bannerLower, "microsoft sql server") || strings.Contains(bannerLower, "sql server"):
-		add("MSSQL", "medium")
-	case strings.Contains(bannerLower, "oracle"):
-		add("Oracle", "medium")
-	case strings.Contains(bannerLower, "mongodb"):
-		add("MongoDB", "medium")
-	case strings.Contains(bannerLower, "redis"):
-		add("Redis", "medium")
-	case strings.Contains(bannerLower, "cassandra"):
-		add("Cassandra", "medium")
-	case strings.Contains(bannerLower, "influxdb"):
-		add("InfluxDB", "medium")
-	case strings.Contains(bannerLower, "neo4j"):
-		add("Neo4j", "medium")
-	case strings.Contains(bannerLower, "memcached"):
-		add("Memcached", "medium")
-	case strings.Contains(bannerLower, "zookeeper"):
-		add("ZooKeeper", "medium")
-	case strings.Contains(bannerLower, "ldap"):
-		add("LDAP", "medium")
-	case strings.HasPrefix(bannerLower, "rfb "):
-		add("VNC", "medium")
-	case strings.HasPrefix(bannerLower, "220 ") || strings.Contains(bannerLower, "esmtp"):
-		if port == 25 || port == 465 || port == 587 {
-			add("SMTP", "medium")
-		}
-	case strings.HasPrefix(bannerLower, "+ok"):
-		if port == 110 || port == 995 {
-			add("POP3", "medium")
-		}
-	case strings.Contains(bannerLower, "ikev2") || strings.Contains(bannerLower, "isakmp") || strings.Contains(bannerLower, "ipsec"):
-		add("IPsec", "medium")
-	}
-
-	switch {
-	case strings.Contains(versionLower, "postgres"):
-		add("PostgreSQL", "low")
-	case strings.Contains(versionLower, "mysql"):
-		add("MySQL", "low")
-	case strings.Contains(versionLower, "oracle"):
-		add("Oracle", "low")
-	case strings.Contains(versionLower, "mongo"):
-		add("MongoDB", "low")
-	case strings.Contains(versionLower, "redis"):
-		add("Redis", "low")
-	}
-
-	var metaText string
 	if len(metadata) > 0 {
-		metaText = strings.ToLower(string(metadata))
-		switch {
-		case strings.Contains(metaText, "postgres"):
-			add("PostgreSQL", "medium")
-		case strings.Contains(metaText, "mysql"):
-			add("MySQL", "medium")
-		case strings.Contains(metaText, "mssql") || strings.Contains(metaText, "sqlserver") || strings.Contains(metaText, "sql server"):
-			add("MSSQL", "medium")
-		case strings.Contains(metaText, "oracle"):
-			add("Oracle", "medium")
-		case strings.Contains(metaText, "mongo"):
-			add("MongoDB", "medium")
-		case strings.Contains(metaText, "redis"):
-			add("Redis", "medium")
-		case strings.Contains(metaText, "cassandra"):
-			add("Cassandra", "medium")
-		case strings.Contains(metaText, "influx"):
-			add("InfluxDB", "medium")
-		case strings.Contains(metaText, "neo4j"):
-			add("Neo4j", "medium")
-		case strings.Contains(metaText, "memcached"):
-			add("Memcached", "medium")
-		case strings.Contains(metaText, "zookeeper"):
-			add("ZooKeeper", "medium")
-		case strings.Contains(metaText, "ldap"):
-			add("LDAP", "medium")
-		case strings.Contains(metaText, "rfb"):
-			add("VNC", "medium")
-		case strings.Contains(metaText, "esmtp"):
-			add("SMTP", "medium")
-		case strings.Contains(metaText, "pop3"):
-			add("POP3", "medium")
-		case strings.Contains(metaText, "ikev2") || strings.Contains(metaText, "isakmp") || strings.Contains(metaText, "ipsec"):
-			add("IPsec", "medium")
-		}
-
 		var raw map[string]any
 		if json.Unmarshal(metadata, &raw) == nil {
 			if cpes, ok := raw["cpes"].([]any); ok {
 				for _, cpe := range cpes {
 					cpeStr, _ := cpe.(string)
-					switch {
-					case strings.Contains(cpeStr, ":postgresql:"):
-						add("PostgreSQL", "high")
-					case strings.Contains(cpeStr, ":mysql:"):
-						add("MySQL", "high")
-					case strings.Contains(cpeStr, ":oracle:"):
-						add("Oracle", "high")
-					case strings.Contains(cpeStr, ":mongodb:"):
-						add("MongoDB", "high")
-					case strings.Contains(cpeStr, ":redis:"):
-						add("Redis", "high")
-					case strings.Contains(cpeStr, ":cassandra:"):
-						add("Cassandra", "high")
-					case strings.Contains(cpeStr, ":influxdb:"):
-						add("InfluxDB", "high")
-					case strings.Contains(cpeStr, ":neo4j:"):
-						add("Neo4j", "high")
-					case strings.Contains(cpeStr, ":memcached:"):
-						add("Memcached", "high")
-					case strings.Contains(cpeStr, ":zookeeper:"):
-						add("ZooKeeper", "high")
-					case strings.Contains(cpeStr, ":openldap:") || strings.Contains(cpeStr, ":ldap"):
-						add("LDAP", "high")
-					case strings.Contains(cpeStr, ":realvnc:") || strings.Contains(cpeStr, ":vnc"):
-						add("VNC", "high")
-					case strings.Contains(cpeStr, ":postfix:") || strings.Contains(cpeStr, ":exim:") || strings.Contains(cpeStr, ":sendmail:"):
-						add("SMTP", "high")
-					case strings.Contains(cpeStr, ":dovecot:") || strings.Contains(cpeStr, ":courier:") || strings.Contains(cpeStr, ":pop3"):
-						add("POP3", "high")
-					}
+					applyProductMatchers(strings.ToLower(cpeStr), port, cpeMatchers, "high", add)
 				}
 			}
 		}
 	}
 
-	if proto == "udp" && (port == 500 || port == 4500) && (strings.Contains(metaText, "ike") || strings.Contains(metaText, "isakmp") || strings.Contains(metaText, "ipsec") || strings.Contains(svc, "ike") || strings.Contains(svc, "isakmp") || strings.Contains(svc, "ipsec")) {
+	if proto == "udp" && port == 1194 && (containsAny(metaText, []string{"openvpn"}) || containsAny(svc, []string{"openvpn"})) {
+		add("OpenVPN", "high")
+	}
+	if proto == "udp" && (port == 500 || port == 4500) && (containsAny(metaText, []string{"ike", "isakmp", "ipsec"}) || containsAny(svc, []string{"ike", "isakmp", "ipsec"})) {
 		add("IPsec", "high")
 	}
 
 	return products
+}
+
+func applyProductMatchers(text string, port int, matchers []productMatcher, confidence string, add func(string, string)) {
+	if text == "" {
+		return
+	}
+	for _, matcher := range matchers {
+		if len(matcher.ports) > 0 && !portAllowed(port, matcher.ports) {
+			continue
+		}
+		if containsAny(text, matcher.patterns) {
+			add(matcher.product, confidence)
+		}
+	}
+}
+
+func containsAny(text string, patterns []string) bool {
+	for _, pattern := range patterns {
+		if strings.Contains(text, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func portAllowed(port int, ports []int) bool {
+	for _, allowed := range ports {
+		if port == allowed {
+			return true
+		}
+	}
+	return false
 }
