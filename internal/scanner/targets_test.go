@@ -76,3 +76,50 @@ func TestParseTargets(t *testing.T) {
 		})
 	}
 }
+
+func TestParseEndpointTargets(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    int
+		wantErr bool
+	}{
+		{
+			name:  "hostname and ip",
+			input: "example.com:443\n10.0.0.1:22\n",
+			want:  2,
+		},
+		{
+			name:  "dedup hostname normalization",
+			input: "Example.com:443\nexample.com.:443\n",
+			want:  1,
+		},
+		{
+			name:  "ipv6",
+			input: "[2001:db8::1]:443\n",
+			want:  1,
+		},
+		{
+			name:    "missing port",
+			input:   "example.com\n",
+			wantErr: true,
+		},
+		{
+			name:    "invalid port",
+			input:   "example.com:99999\n",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseEndpointTargets(strings.NewReader(tt.input))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr = %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && len(got) != tt.want {
+				t.Fatalf("got %d targets, want %d", len(got), tt.want)
+			}
+		})
+	}
+}

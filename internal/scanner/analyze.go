@@ -339,6 +339,18 @@ func buildSummary(results []ScanResult) string {
 			}
 		}
 
+		if len(r.Products) > 0 {
+			products := make([]string, 0, len(r.Products))
+			for _, product := range r.Products {
+				if product.Confidence != "" {
+					products = append(products, product.Name+" ("+strings.ToLower(product.Confidence)+")")
+				} else {
+					products = append(products, product.Name)
+				}
+			}
+			fmt.Fprintf(&b, "  Products: %s\n", strings.Join(products, ", "))
+		}
+
 		if r.App != nil {
 			if r.App.Server != "" {
 				fmt.Fprintf(&b, "  Server: %s\n", r.App.Server)

@@ -24,6 +24,7 @@ type ScanMetadata struct {
 	ServicesFound   int64              `json:"services_found"`
 	RateLimit       int                `json:"rate_limit"`
 	Workers         int                `json:"workers"`
+	MaxHostConns    int                `json:"max_host_conns"`
 	Guardrails      GuardrailsMetadata `json:"guardrails"`
 	DNS             DNSMetadata        `json:"dns"`
 }

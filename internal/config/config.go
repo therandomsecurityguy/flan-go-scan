@@ -13,6 +13,7 @@ type Config struct {
 		Ports         string        `mapstructure:"ports"`
 		RateLimit     int           `mapstructure:"rate_limit"`
 		Workers       int           `mapstructure:"workers"`
+		MaxHostConns  int           `mapstructure:"max_host_conns"`
 		Discovery     bool          `mapstructure:"discovery"`
 		StatsInterval int           `mapstructure:"stats_interval"`
 		UDP           bool          `mapstructure:"udp"`
@@ -76,6 +77,7 @@ func defaults() *Config {
 	cfg.Scan.Ports = "21,22,23,25,53,80,110,111,135,139,143,443,445,993,995,1433,1521,2049,3306,3389,5432,5900,6379,8080,8443,9200,9300,27017"
 	cfg.Scan.RateLimit = 200
 	cfg.Scan.Workers = 100
+	cfg.Scan.MaxHostConns = 0
 	cfg.Scan.Discovery = true
 	cfg.Scan.StatsInterval = 5
 	cfg.Scan.UDP = false

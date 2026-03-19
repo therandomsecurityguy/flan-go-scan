@@ -30,6 +30,7 @@ Flan is a Swiss army knife network scanner in Go. Successor to [Flan Scan](https
 - Progress reporting
 - UDP service detection (DNS, NTP, SNMP, IPSEC) via `--udp`
 - Web crawler with app fingerprinting via `--crawl` (path, header, and cookie-based detection for 60+ CMSes, frameworks, and admin tools)
+- Default deeper product fingerprinting for cloud/admin/data surfaces such as Kubernetes, Grafana, Vault, Elasticsearch, PostgreSQL, Redis, LDAP, SMB, GraphQL, OpenVPN, and IPsec
 - Context-aware rate limiting and TLS inspection — clean shutdown on Ctrl+C
 - Graceful shutdown on SIGINT/SIGTERM
 - AI-powered security analysis via [Together API](https://together.ai) (`Qwen/Qwen3.5-9B`) — brief summary on every scan, detailed report with `--analyze`
@@ -94,6 +95,20 @@ Scan from a file with top 1000 ports:
 ```
 flan -l targets.txt --top-ports 1000
 ```
+
+Fingerprint already-open endpoints directly:
+
+```
+flan -t scanme.nmap.org:22 --fingerprint-only
+```
+
+Fingerprint a known database or service endpoint directly:
+
+```
+flan -t 10.0.0.15:5432 --fingerprint-only
+```
+
+High-signal platform fingerprints are surfaced automatically for common control-plane and admin surfaces, including `Kubernetes`, `Grafana`, `Vault`, `Artifactory`, `Elasticsearch`, `Consul`, `Prometheus`, `TeamCity`, and `etcd`.
 
 Scan a CIDR range from stdin:
 
@@ -209,6 +224,12 @@ Crawl HTTP/HTTPS services for endpoints, sensitive paths, and app fingerprinting
 flan -t example.com --crawl
 ```
 
+Run a normal scan and let Flan surface deeper product fingerprints automatically:
+
+```
+flan -t api.example.com
+```
+
 Crawl with custom depth:
 
 ```
@@ -239,6 +260,9 @@ Flan uses a deterministic resolver chain: custom resolver when provided, otherwi
 
 ```yaml
 scan:
+  rate_limit: 200
+  workers: 100
+  max_host_conns: 0
   max_targets: 5000
   max_ports_per_target: 5000
   max_duration: 30m
@@ -247,6 +271,8 @@ dns:
   fallback_resolvers: ["1.1.1.1:53", "8.8.8.8:53"]
   lookup_timeout: 3s
 ```
+
+Use `--workers`, `--rate-limit`, and `--max-host-conns` to tune scan concurrency and make large inventory-backed runs gentler on shared targets and load-balanced services.
 
 > [!TIP]
 Security-header findings are generated only for HTTP `2xx/3xx` responses. On `4xx/5xx` responses, which are common on load balancer and CDN default pages, Flan reports header checks as skipped instead of treating them as header failures.
@@ -313,6 +339,10 @@ Common options: AWS_PROFILE=<profile>, aws sso login, or environment credentials
 | `--top-ports` | Use top port profile: `100`, `1000`, `2000`, or `5000` |
 | `--subdomain-ports` | Domain mode port profile: `web`, `standard`, or `full` |
 | `-c` | Config file (default `config/config.yaml`) |
+| `--workers` | Number of concurrent scan workers |
+| `--rate-limit` | Global scan requests per second |
+| `--max-host-conns` | Max concurrent scan connections per host IP (`0` disables) |
+| `--fingerprint-only` | Treat manual input as `host:port` targets and skip host discovery |
 | `-w` | Custom DNS subdomain wordlist |
 | `-r` | Custom DNS resolver (ip:port) |
 | `--cloudflare` | Discover scan targets from Cloudflare zone DNS records |
