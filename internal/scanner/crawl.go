@@ -43,7 +43,7 @@ var sensitivePaths = []string{
 	"/api", "/api/v1", "/api/v2", "/api/docs",
 	"/swagger", "/swagger-ui", "/swagger-ui.html", "/swagger.json", "/openapi.json",
 	"/graphql", "/graphiql",
-	"/version", "/readyz", "/livez", "/api", "/apis",
+	"/version", "/readyz", "/livez", "/healthz", "/api", "/apis", "/openapi/v2", "/openapi/v3",
 	"/debug/pprof", "/__debug__/",
 	"/wp-login.php", "/wp-admin/", "/wp-content/", "/wp-includes/", "/xmlrpc.php", "/wp-json/",
 	"/administrator/", "/components/", "/templates/",
@@ -211,6 +211,9 @@ var productProbePaths = []string{
 	"/apis",
 	"/readyz",
 	"/livez",
+	"/healthz",
+	"/openapi/v2",
+	"/openapi/v3",
 	"/v1/sys/health",
 	"/v1/agent/self",
 	"/-/healthy",
@@ -541,10 +544,19 @@ func detectDeeperProduct(path string, cr *CrawlResult, headers http.Header, body
 	case path == "/version" && strings.Contains(bodyLower, "etcdserver") || strings.Contains(bodyLower, "etcdcluster"):
 		addProduct(fp, productsFound, "etcd", "high")
 	case path == "/version" && strings.Contains(bodyLower, "\"major\"") && strings.Contains(bodyLower, "\"minor\""):
+		addProduct(fp, productsFound, "Kubernetes API Server", "high")
 		addProduct(fp, productsFound, "Kubernetes", "high")
 	case statusOK && (headers.Get("Audit-Id") != "" || headers.Get("X-Kubernetes-Pf-Flowschema-Uid") != "" || headers.Get("X-Kubernetes-Pf-Prioritylevel-Uid") != ""):
+		addProduct(fp, productsFound, "Kubernetes API Server", "high")
 		addProduct(fp, productsFound, "Kubernetes", "medium")
-	case statusOK && (path == "/api" || path == "/apis" || path == "/readyz" || path == "/livez") && strings.Contains(bodyLower, "kubernetes"):
+	case statusOK && (path == "/api" || path == "/apis" || path == "/readyz" || path == "/livez" || path == "/healthz" || path == "/openapi/v2" || path == "/openapi/v3") && strings.Contains(bodyLower, "kubernetes"):
+		addProduct(fp, productsFound, "Kubernetes API Server", "medium")
+		addProduct(fp, productsFound, "Kubernetes", "medium")
+	case strings.Contains(title, "kubernetes dashboard") || strings.Contains(bodyLower, "kubernetes dashboard"):
+		addProduct(fp, productsFound, "Kubernetes Dashboard", "high")
+		addProduct(fp, productsFound, "Kubernetes", "medium")
+	case (path == "/" || path == "/healthz") && (strings.Contains(bodyLower, "default backend - 404") || strings.Contains(bodyLower, "ingress-nginx")):
+		addProduct(fp, productsFound, "Kubernetes Ingress", "high")
 		addProduct(fp, productsFound, "Kubernetes", "medium")
 	case strings.Contains(generator, "grafana"):
 		addProduct(fp, productsFound, "Grafana", "medium")

@@ -194,6 +194,74 @@ func TestDetectDeeperProduct(t *testing.T) {
 	}
 }
 
+func TestDetectDeeperProductKubernetesAPIServer(t *testing.T) {
+	fp := &AppFingerprint{}
+	products := make(map[string]string)
+
+	detectDeeperProduct(
+		"/version",
+		&CrawlResult{Path: "/version", StatusCode: http.StatusOK},
+		http.Header{"Audit-Id": []string{"1234"}},
+		`{"major":"1","minor":"31","gitVersion":"v1.31.0"}`,
+		fp,
+		products,
+	)
+
+	got := make(map[string]string, len(fp.Products))
+	for _, product := range fp.Products {
+		got[product.Name] = product.Confidence
+	}
+	if got["Kubernetes API Server"] != "high" {
+		t.Fatalf("expected Kubernetes API Server high confidence, got %+v", fp.Products)
+	}
+	if got["Kubernetes"] == "" {
+		t.Fatalf("expected Kubernetes umbrella product, got %+v", fp.Products)
+	}
+}
+
+func TestDetectDeeperProductKubernetesIngress(t *testing.T) {
+	fp := &AppFingerprint{}
+	products := make(map[string]string)
+
+	detectDeeperProduct(
+		"/",
+		&CrawlResult{Path: "/", StatusCode: http.StatusNotFound},
+		http.Header{},
+		`default backend - 404`,
+		fp,
+		products,
+	)
+
+	got := make(map[string]string, len(fp.Products))
+	for _, product := range fp.Products {
+		got[product.Name] = product.Confidence
+	}
+	if got["Kubernetes Ingress"] != "high" {
+		t.Fatalf("expected Kubernetes Ingress high confidence, got %+v", fp.Products)
+	}
+}
+
+func TestDetectDeeperProductKubernetesDashboard(t *testing.T) {
+	fp := &AppFingerprint{}
+	products := make(map[string]string)
+
+	detectDeeperProduct(
+		"/",
+		&CrawlResult{Path: "/", StatusCode: http.StatusOK, Title: "Kubernetes Dashboard"},
+		http.Header{},
+		`<html>Kubernetes Dashboard</html>`,
+		fp,
+		products,
+	)
+
+	for _, product := range fp.Products {
+		if product.Name == "Kubernetes Dashboard" {
+			return
+		}
+	}
+	t.Fatalf("expected Kubernetes Dashboard product, got %+v", fp.Products)
+}
+
 func TestDetectDeeperProductGraphQL(t *testing.T) {
 	fp := &AppFingerprint{}
 	products := make(map[string]string)
