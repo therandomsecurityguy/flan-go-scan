@@ -70,6 +70,19 @@ func TestDetectServiceClosedPort(t *testing.T) {
 	}
 }
 
+func TestDetectServiceContextRespectsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	result := DetectServiceContext(ctx, "192.0.2.1", 22, 5*time.Second)
+	if result.Name != "closed" {
+		t.Fatalf("expected closed, got %s", result.Name)
+	}
+	if time.Since(start) > 500*time.Millisecond {
+		t.Fatalf("expected canceled detect service to return quickly")
+	}
+}
+
 func TestIsTCPPortOpen(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

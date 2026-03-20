@@ -1,6 +1,7 @@
 package dns
 
 import (
+	"context"
 	"net"
 	"testing"
 	"time"
@@ -57,5 +58,30 @@ func TestShouldFallback(t *testing.T) {
 	}
 	if !shouldFallback(&net.DNSError{IsTimeout: true}) {
 		t.Fatal("expected timeout DNS errors to use fallback")
+	}
+}
+
+func TestLookupContextRespectsCancellation(t *testing.T) {
+	cache := &DNSCache{
+		entries:       make(map[string]cacheEntry),
+		lookupTimeout: time.Second,
+		resolvers: []resolverEndpoint{
+			{
+				name: "test",
+				resolver: &net.Resolver{
+					PreferGo: true,
+					Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+						<-ctx.Done()
+						return nil, ctx.Err()
+					},
+				},
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := cache.LookupContext(ctx, "example.com"); err == nil {
+		t.Fatal("expected cancellation error")
 	}
 }

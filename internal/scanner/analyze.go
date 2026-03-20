@@ -227,9 +227,6 @@ func choiceContent(choice together.ChatCompletionChoice) string {
 	if text := sanitizeModelOutput(choice.Text); text != "" {
 		return text
 	}
-	if text := sanitizeModelOutput(choice.Message.Reasoning); text != "" {
-		return text
-	}
 	return ""
 }
 

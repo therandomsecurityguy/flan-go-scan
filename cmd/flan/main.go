@@ -1446,14 +1446,15 @@ func splitCSV(input string) []string {
 	out := make([]string, 0, len(parts))
 	seen := make(map[string]struct{}, len(parts))
 	for _, part := range parts {
-		value := strings.ToLower(strings.TrimSpace(part))
+		value := strings.TrimSpace(part)
 		if value == "" {
 			continue
 		}
-		if _, exists := seen[value]; exists {
+		key := strings.ToLower(value)
+		if _, exists := seen[key]; exists {
 			continue
 		}
-		seen[value] = struct{}{}
+		seen[key] = struct{}{}
 		out = append(out, value)
 	}
 	return out
@@ -1602,7 +1603,7 @@ func resolveTargets(
 				if host == "" {
 					continue
 				}
-				resolvedIPs, err := dnsCache.Lookup(host)
+				resolvedIPs, err := dnsCache.LookupContext(ctx, host)
 				if err != nil {
 					slog.Warn("DNS lookup failed", "host", host, "err", err)
 					continue
@@ -1828,7 +1829,7 @@ func scanTCPPort(
 	}
 
 	if service == "" || service == "unknown" {
-		svc := scanner.DetectService(ip, port, cfg.Scan.Timeout)
+		svc := scanner.DetectServiceContext(ctx, ip, port, cfg.Scan.Timeout)
 		if svc.Name == "closed" {
 			return nil
 		}

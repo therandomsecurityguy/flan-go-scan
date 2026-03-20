@@ -10,6 +10,8 @@ import (
 	"strings"
 )
 
+const maxTargetScannerTokenSize = 1024 * 1024
+
 type EndpointTarget struct {
 	Host string
 	Port int
@@ -19,6 +21,7 @@ func ParseTargets(r io.Reader) ([]string, error) {
 	var targets []string
 	seen := make(map[string]bool)
 	s := bufio.NewScanner(r)
+	s.Buffer(make([]byte, 0, 64*1024), maxTargetScannerTokenSize)
 
 	for s.Scan() {
 		line := strings.TrimSpace(s.Text())
@@ -46,6 +49,7 @@ func ParseEndpointTargets(r io.Reader) ([]EndpointTarget, error) {
 	var targets []EndpointTarget
 	seen := make(map[string]bool)
 	s := bufio.NewScanner(r)
+	s.Buffer(make([]byte, 0, 64*1024), maxTargetScannerTokenSize)
 
 	for s.Scan() {
 		line := strings.TrimSpace(s.Text())

@@ -2,7 +2,6 @@ package scanner
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/netip"
 	"time"
 
@@ -27,7 +26,7 @@ func FingerprintUDP(host string, port int, timeout time.Duration) *FingerprintRe
 }
 
 func fingerprint(host string, port int, timeout time.Duration, udp bool) *FingerprintResult {
-	addr, err := netip.ParseAddrPort(fmt.Sprintf("%s:%d", host, port))
+	addr, err := fingerprintAddr(host, port)
 	if err != nil {
 		return nil
 	}
@@ -56,4 +55,12 @@ func fingerprint(host string, port int, timeout time.Duration, udp bool) *Finger
 		TLS:       result.TLS,
 		Metadata:  result.Raw,
 	}
+}
+
+func fingerprintAddr(host string, port int) (netip.AddrPort, error) {
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return netip.AddrPort{}, err
+	}
+	return netip.AddrPortFrom(ip, uint16(port)), nil
 }

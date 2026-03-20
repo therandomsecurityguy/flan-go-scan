@@ -54,6 +54,10 @@ func NewDNSCache(ttl, lookupTimeout time.Duration, primaryResolver string, fallb
 }
 
 func (c *DNSCache) Lookup(host string) ([]net.IP, error) {
+	return c.LookupContext(context.Background(), host)
+}
+
+func (c *DNSCache) LookupContext(ctx context.Context, host string) ([]net.IP, error) {
 	host = strings.TrimSpace(host)
 	if host == "" {
 		return nil, &net.DNSError{Err: "empty host"}
@@ -83,7 +87,7 @@ func (c *DNSCache) Lookup(host string) ([]net.IP, error) {
 			c.mu.Unlock()
 		}
 
-		lookupCtx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
+		lookupCtx, cancel := context.WithTimeout(ctx, lookupTimeout)
 		addrs, err := resolver.resolver.LookupIPAddr(lookupCtx, host)
 		cancel()
 		if err != nil {
