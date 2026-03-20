@@ -61,7 +61,7 @@ func TestPickHonorsExplicitFlags(t *testing.T) {
 
 func TestSplitCSV(t *testing.T) {
 	values := splitCSV(" crtsh,ANUBIS,crtsh , ,digitorus ")
-	want := []string{"crtsh", "anubis", "digitorus"}
+	want := []string{"crtsh", "ANUBIS", "digitorus"}
 	if !reflect.DeepEqual(values, want) {
 		t.Fatalf("unexpected parsed CSV values: got %v want %v", values, want)
 	}

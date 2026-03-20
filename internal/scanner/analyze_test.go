@@ -30,14 +30,14 @@ func TestChoiceContentFallsBackToText(t *testing.T) {
 	}
 }
 
-func TestChoiceContentFallsBackToReasoning(t *testing.T) {
+func TestChoiceContentDoesNotFallbackToReasoning(t *testing.T) {
 	choice := together.ChatCompletionChoice{
 		Message: together.ChatCompletionChoiceMessage{
 			Reasoning: "<report>summary</report>",
 		},
 	}
 
-	if got := choiceContent(choice); got != "summary" {
+	if got := choiceContent(choice); got != "" {
 		t.Fatalf("unexpected content: %q", got)
 	}
 }

@@ -123,3 +123,14 @@ func TestParseEndpointTargets(t *testing.T) {
 		})
 	}
 }
+
+func TestParseTargetsAllowsLargeLines(t *testing.T) {
+	longHost := strings.Repeat("a", 70*1024)
+	got, err := ParseTargets(strings.NewReader(longHost + "\n"))
+	if err != nil {
+		t.Fatalf("ParseTargets returned error: %v", err)
+	}
+	if len(got) != 1 || got[0] != longHost {
+		t.Fatalf("unexpected targets: %v", got)
+	}
+}

@@ -32,8 +32,13 @@ func IsTCPPortOpen(ctx context.Context, host string, port int, timeout time.Dura
 }
 
 func DetectService(host string, port int, timeout time.Duration) ServiceResult {
+	return DetectServiceContext(context.Background(), host, port, timeout)
+}
+
+func DetectServiceContext(ctx context.Context, host string, port int, timeout time.Duration) ServiceResult {
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	conn, err := net.DialTimeout("tcp", addr, timeout)
+	dialer := net.Dialer{Timeout: timeout}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return ServiceResult{Name: "closed"}
 	}
