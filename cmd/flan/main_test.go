@@ -98,6 +98,21 @@ func TestSelectKubernetesOptions(t *testing.T) {
 	}
 }
 
+func TestValidationOnlyKubernetesMode(t *testing.T) {
+	if !validationOnlyKubernetesMode(map[string]bool{}, "", false, false, false) {
+		t.Fatal("expected validation-only kubernetes mode without explicit scan inputs")
+	}
+	if validationOnlyKubernetesMode(map[string]bool{"list": true}, "", false, false, false) {
+		t.Fatal("did not expect validation-only mode when a list is explicitly requested")
+	}
+	if validationOnlyKubernetesMode(map[string]bool{}, "example.com", false, false, false) {
+		t.Fatal("did not expect validation-only mode with domain scanning enabled")
+	}
+	if validationOnlyKubernetesMode(map[string]bool{}, "", false, false, true) {
+		t.Fatal("did not expect validation-only mode with fingerprint-only targets")
+	}
+}
+
 func TestNormalizeDiscoveredHosts(t *testing.T) {
 	in := []string{"Example.com", "example.com.", "127.0.0.1", " 127.0.0.1 ", "", " api.example.com "}
 	got := normalizeDiscoveredHosts(in)

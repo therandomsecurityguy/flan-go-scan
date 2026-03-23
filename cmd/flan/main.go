@@ -472,6 +472,10 @@ func main() {
 			os.Exit(1)
 		}
 		slog.Info("kubernetes cluster validated", "context", target.Context, "cluster", target.Cluster, "server", target.Server)
+		if validationOnlyKubernetesMode(set, dom, cloudflareEnabled, awsEnabled, *fingerprintOnly) {
+			slog.Info("no scan targets requested; kubeconfig validation complete")
+			return
+		}
 	}
 
 	if tgt != "" && !*fingerprintOnly {
@@ -801,10 +805,6 @@ func main() {
 	if len(hosts) == 0 && len(endpointTargets) == 0 {
 		if noTargetsFromDelta {
 			slog.Info("no delta targets to scan")
-			return
-		}
-		if kubeEnabled {
-			slog.Info("no scan targets requested; kubeconfig validation complete")
 			return
 		}
 		slog.Error("no hosts to scan, provide -t, -d, -l, --cloudflare, or --aws")
@@ -1505,6 +1505,17 @@ func selectKubernetesOptions(set map[string]bool, cfg *config.Config, kubeconfig
 		opts.kubeconfig != "" ||
 		opts.context != ""
 	return opts, enabled
+}
+
+func validationOnlyKubernetesMode(set map[string]bool, domain string, cloudflareEnabled bool, awsEnabled bool, fingerprintOnly bool) bool {
+	return !set["target"] &&
+		!set["t"] &&
+		!set["list"] &&
+		!set["l"] &&
+		domain == "" &&
+		!cloudflareEnabled &&
+		!awsEnabled &&
+		!fingerprintOnly
 }
 
 func normalizeDiscoveredHosts(hosts []string) []string {
