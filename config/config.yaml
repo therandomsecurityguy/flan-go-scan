@@ -54,3 +54,8 @@ aws:
   inventory_out: ""
   diff_against: ""
   delta_only: false
+kubernetes:
+  enabled: false
+  kubeconfig: ""
+  context: ""
+  timeout: 10s

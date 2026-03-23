@@ -76,6 +76,15 @@ func TestLoadConfigMissingFileUsesDefaults(t *testing.T) {
 	if cfg.AWS.DeltaOnly {
 		t.Fatal("unexpected default aws delta_only to be true")
 	}
+	if cfg.Kubernetes.Kubeconfig != "" {
+		t.Fatalf("unexpected default kubernetes kubeconfig: %q", cfg.Kubernetes.Kubeconfig)
+	}
+	if cfg.Kubernetes.Context != "" {
+		t.Fatalf("unexpected default kubernetes context: %q", cfg.Kubernetes.Context)
+	}
+	if cfg.Kubernetes.Timeout != 10*time.Second {
+		t.Fatalf("unexpected default kubernetes timeout: %v", cfg.Kubernetes.Timeout)
+	}
 }
 
 func TestLoadConfigFromFileOverridesDefaults(t *testing.T) {
@@ -127,6 +136,11 @@ aws:
   inventory_out: ./reports/aws.json
   diff_against: ./reports/aws-prev.json
   delta_only: true
+kubernetes:
+  enabled: true
+  kubeconfig: /tmp/test-kubeconfig
+  context: prod-cluster
+  timeout: 9s
 `
 	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -234,5 +248,17 @@ aws:
 	}
 	if !cfg.AWS.DeltaOnly {
 		t.Fatal("expected aws delta_only override to be true")
+	}
+	if !cfg.Kubernetes.Enabled {
+		t.Fatal("expected kubernetes enabled override to be true")
+	}
+	if cfg.Kubernetes.Kubeconfig != "/tmp/test-kubeconfig" {
+		t.Fatalf("unexpected kubernetes kubeconfig override: %s", cfg.Kubernetes.Kubeconfig)
+	}
+	if cfg.Kubernetes.Context != "prod-cluster" {
+		t.Fatalf("unexpected kubernetes context override: %s", cfg.Kubernetes.Context)
+	}
+	if cfg.Kubernetes.Timeout != 9*time.Second {
+		t.Fatalf("unexpected kubernetes timeout override: %v", cfg.Kubernetes.Timeout)
 	}
 }

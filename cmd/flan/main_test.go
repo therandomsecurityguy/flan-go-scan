@@ -67,6 +67,37 @@ func TestSplitCSV(t *testing.T) {
 	}
 }
 
+func TestSelectKubernetesOptions(t *testing.T) {
+	cfg := &config.Config{}
+
+	opts, enabled := selectKubernetesOptions(map[string]bool{}, cfg, "", "")
+	if enabled {
+		t.Fatal("did not expect kubernetes mode enabled by default")
+	}
+	if opts.kubeconfig != "" || opts.context != "" {
+		t.Fatalf("unexpected default kube opts: %+v", opts)
+	}
+
+	cfg.Kubernetes.Enabled = true
+	cfg.Kubernetes.Kubeconfig = "/tmp/config"
+	cfg.Kubernetes.Context = "prod"
+	opts, enabled = selectKubernetesOptions(map[string]bool{}, cfg, "", "")
+	if !enabled {
+		t.Fatal("expected kubernetes mode enabled from config")
+	}
+	if opts.kubeconfig != "/tmp/config" || opts.context != "prod" {
+		t.Fatalf("unexpected config kube opts: %+v", opts)
+	}
+
+	opts, enabled = selectKubernetesOptions(map[string]bool{"kubeconfig": true, "kube-context": true}, cfg, "/tmp/override", "staging")
+	if !enabled {
+		t.Fatal("expected kubernetes mode enabled from flags")
+	}
+	if opts.kubeconfig != "/tmp/override" || opts.context != "staging" {
+		t.Fatalf("unexpected overridden kube opts: %+v", opts)
+	}
+}
+
 func TestNormalizeDiscoveredHosts(t *testing.T) {
 	in := []string{"Example.com", "example.com.", "127.0.0.1", " 127.0.0.1 ", "", " api.example.com "}
 	got := normalizeDiscoveredHosts(in)

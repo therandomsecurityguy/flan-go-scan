@@ -23,6 +23,7 @@ import (
 	"github.com/therandomsecurityguy/flan-go-scan/internal/output"
 	awsprovider "github.com/therandomsecurityguy/flan-go-scan/internal/providers/aws"
 	cfprovider "github.com/therandomsecurityguy/flan-go-scan/internal/providers/cloudflare"
+	kubeprovider "github.com/therandomsecurityguy/flan-go-scan/internal/providers/kubernetes"
 	"github.com/therandomsecurityguy/flan-go-scan/internal/scanner"
 	"golang.org/x/sync/singleflight"
 )
@@ -100,6 +101,8 @@ func usage() {
 		{"--aws-inventory-out string", "write normalized AWS inventory snapshot to this path"},
 		{"--aws-diff-against string", "compare the current AWS inventory against a previous snapshot (defaults to --aws-inventory-out when omitted)"},
 		{"--aws-delta-only", "scan only added/changed AWS targets when a previous snapshot is available"},
+		{"--kubeconfig string", "path to kubeconfig for Kubernetes validation"},
+		{"--kube-context string", "optional kubeconfig context to use"},
 		{"--passive-only", "skip brute-force, use passive sources only"},
 		{"--subdomains-only", "print discovered subdomains and exit (subfinder-style)"},
 		{"--subfinder-sources string", "comma-separated passive sources override"},
@@ -133,6 +136,7 @@ func usage() {
 		"flan -d example.net",
 		"flan --cloudflare --cloudflare-zones example.net --cloudflare-include api.example.net",
 		"AWS_PROFILE=<profile> flan --aws --aws-regions us-west-2",
+		"flan --kubeconfig ~/.kube/config --kube-context prod-cluster",
 		"flan -d example.net --subdomains-only",
 		`echo "10.0.0.0/24" | flan -l -`,
 	}
@@ -297,6 +301,8 @@ func main() {
 	awsInventoryOut := flag.String("aws-inventory-out", "", "")
 	awsDiffAgainst := flag.String("aws-diff-against", "", "")
 	awsDeltaOnly := flag.Bool("aws-delta-only", false, "")
+	kubeconfigFlag := flag.String("kubeconfig", "", "")
+	kubeContextFlag := flag.String("kube-context", "", "")
 	passiveOnly := flag.Bool("passive-only", false, "")
 	subdomainsOnly := flag.Bool("subdomains-only", false, "")
 	subfinderSources := flag.String("subfinder-sources", "", "")
@@ -392,6 +398,7 @@ func main() {
 	}
 	cloudflareEnabled := *cloudflareFlag || cfg.Cloudflare.Enabled
 	awsEnabled := *awsFlag || cfg.AWS.Enabled
+	kubeOpts, kubeEnabled := selectKubernetesOptions(set, cfg, *kubeconfigFlag, *kubeContextFlag)
 	if *fingerprintOnly && (dom != "" || cloudflareEnabled || awsEnabled || *subdomainsOnly) {
 		slog.Error("--fingerprint-only only supports manual -t/-l host:port inputs")
 		os.Exit(1)
@@ -454,6 +461,18 @@ func main() {
 	var hosts []string
 	var endpointTargets []scanner.EndpointTarget
 	noTargetsFromDelta := false
+
+	if kubeEnabled {
+		target, err := kubeprovider.NewClient(cfg.Kubernetes.Timeout).Validate(ctx, kubeprovider.ValidateOptions{
+			Kubeconfig: kubeOpts.kubeconfig,
+			Context:    kubeOpts.context,
+		})
+		if err != nil {
+			slog.Error("kubernetes validation failed", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("kubernetes cluster validated", "context", target.Context, "cluster", target.Cluster, "server", target.Server)
+	}
 
 	if tgt != "" && !*fingerprintOnly {
 		hosts = append(hosts, tgt)
@@ -782,6 +801,10 @@ func main() {
 	if len(hosts) == 0 && len(endpointTargets) == 0 {
 		if noTargetsFromDelta {
 			slog.Info("no delta targets to scan")
+			return
+		}
+		if kubeEnabled {
+			slog.Info("no scan targets requested; kubeconfig validation complete")
 			return
 		}
 		slog.Error("no hosts to scan, provide -t, -d, -l, --cloudflare, or --aws")
@@ -1458,6 +1481,30 @@ func splitCSV(input string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+type kubernetesOptions struct {
+	kubeconfig string
+	context    string
+}
+
+func selectKubernetesOptions(set map[string]bool, cfg *config.Config, kubeconfigFlag string, kubeContextFlag string) (kubernetesOptions, bool) {
+	opts := kubernetesOptions{
+		kubeconfig: strings.TrimSpace(cfg.Kubernetes.Kubeconfig),
+		context:    strings.TrimSpace(cfg.Kubernetes.Context),
+	}
+	if set["kubeconfig"] {
+		opts.kubeconfig = strings.TrimSpace(kubeconfigFlag)
+	}
+	if set["kube-context"] {
+		opts.context = strings.TrimSpace(kubeContextFlag)
+	}
+	enabled := cfg.Kubernetes.Enabled ||
+		set["kubeconfig"] ||
+		set["kube-context"] ||
+		opts.kubeconfig != "" ||
+		opts.context != ""
+	return opts, enabled
 }
 
 func normalizeDiscoveredHosts(hosts []string) []string {

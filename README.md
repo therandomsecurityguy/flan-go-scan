@@ -194,6 +194,12 @@ Scan only added or changed AWS targets when a previous snapshot exists:
 AWS_PROFILE=<profile> flan --aws --aws-regions us-west-2 --aws-inventory-out reports/aws-inventory.json --aws-delta-only
 ```
 
+Validate Kubernetes access from a kubeconfig:
+
+```bash
+flan --kubeconfig ~/.kube/config --kube-context prod-cluster
+```
+
 Write a normalized Cloudflare inventory snapshot for later diffing:
 
 ```
@@ -328,6 +334,23 @@ Authentication uses the standard AWS SDK credential chain.
 Common options: AWS_PROFILE=<profile>, aws sso login, or environment credentials.
 ```
 
+### Kubernetes Validation
+
+Kubernetes kubeconfig support is explicit and validation-only in the current phase. Flan loads the selected kubeconfig/context, builds an authenticated client, and verifies the cluster by probing the API server `/version` endpoint. This is intended to confirm that the chosen cluster is externally reachable before later inventory phases.
+
+```yaml
+kubernetes:
+  enabled: false
+  kubeconfig: ""
+  context: ""
+  timeout: 10s
+```
+
+```text
+Path resolution order when Kubernetes mode is enabled: --kubeconfig, config file, KUBECONFIG, then ~/.kube/config.
+Use --kube-context when the kubeconfig contains multiple contexts.
+```
+
 ## Flags
 
 | Flag | Description |
@@ -360,6 +383,8 @@ Common options: AWS_PROFILE=<profile>, aws sso login, or environment credentials
 | `--aws-inventory-out` | Write normalized AWS inventory snapshot to this path |
 | `--aws-diff-against` | Compare the current AWS inventory against a previous snapshot; defaults to `--aws-inventory-out` when omitted |
 | `--aws-delta-only` | Scan only added/changed AWS targets when a previous snapshot is available |
+| `--kubeconfig` | Path to kubeconfig for Kubernetes validation |
+| `--kube-context` | Optional kubeconfig context to use |
 | `--passive-only` | Skip brute-force, use passive sources only |
 | `--subdomains-only` | Print discovered subdomains and exit (no port scan) |
 | `--subfinder-sources` | Comma-separated passive sources override |
