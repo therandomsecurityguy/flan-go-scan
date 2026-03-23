@@ -69,6 +69,12 @@ type Config struct {
 		DiffAgainst  string        `mapstructure:"diff_against"`
 		DeltaOnly    bool          `mapstructure:"delta_only"`
 	} `mapstructure:"aws"`
+	Kubernetes struct {
+		Enabled    bool          `mapstructure:"enabled"`
+		Kubeconfig string        `mapstructure:"kubeconfig"`
+		Context    string        `mapstructure:"context"`
+		Timeout    time.Duration `mapstructure:"timeout"`
+	} `mapstructure:"kubernetes"`
 }
 
 func defaults() *Config {
@@ -114,6 +120,10 @@ func defaults() *Config {
 	cfg.AWS.InventoryOut = ""
 	cfg.AWS.DiffAgainst = ""
 	cfg.AWS.DeltaOnly = false
+	cfg.Kubernetes.Enabled = false
+	cfg.Kubernetes.Kubeconfig = ""
+	cfg.Kubernetes.Context = ""
+	cfg.Kubernetes.Timeout = 10 * time.Second
 	return cfg
 }
 
