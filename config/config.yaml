@@ -56,6 +56,7 @@ aws:
   delta_only: false
 kubernetes:
   enabled: false
+  inventory: false
   kubeconfig: ""
   context: ""
   timeout: 10s

@@ -71,6 +71,7 @@ type Config struct {
 	} `mapstructure:"aws"`
 	Kubernetes struct {
 		Enabled    bool          `mapstructure:"enabled"`
+		Inventory  bool          `mapstructure:"inventory"`
 		Kubeconfig string        `mapstructure:"kubeconfig"`
 		Context    string        `mapstructure:"context"`
 		Timeout    time.Duration `mapstructure:"timeout"`
@@ -121,6 +122,7 @@ func defaults() *Config {
 	cfg.AWS.DiffAgainst = ""
 	cfg.AWS.DeltaOnly = false
 	cfg.Kubernetes.Enabled = false
+	cfg.Kubernetes.Inventory = false
 	cfg.Kubernetes.Kubeconfig = ""
 	cfg.Kubernetes.Context = ""
 	cfg.Kubernetes.Timeout = 10 * time.Second

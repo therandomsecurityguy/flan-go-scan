@@ -200,6 +200,12 @@ Validate Kubernetes access from a kubeconfig:
 flan --kubeconfig ~/.kube/config --kube-context prod-cluster
 ```
 
+Enumerate externally reachable Kubernetes resources from an authenticated cluster and scan them:
+
+```bash
+flan --kubeconfig ~/.kube/config --kube-context prod-cluster --kube-inventory
+```
+
 Write a normalized Cloudflare inventory snapshot for later diffing:
 
 ```
@@ -334,13 +340,14 @@ Authentication uses the standard AWS SDK credential chain.
 Common options: AWS_PROFILE=<profile>, aws sso login, or environment credentials.
 ```
 
-### Kubernetes Validation
+### Kubernetes Access
 
-Kubernetes kubeconfig support is explicit and validation-only in the current phase. Flan loads the selected kubeconfig/context, builds an authenticated client, and verifies the cluster by probing the API server `/version` endpoint. This is intended to confirm that the chosen cluster is externally reachable before later inventory phases.
+Kubernetes kubeconfig support is explicit. Flan can validate cluster access via the API server `/version` endpoint, or enumerate externally relevant resources from authenticated cluster access when `--kube-inventory` is enabled. The current inventory phase focuses on API server metadata, `Ingress` resources, `LoadBalancer` services, and externally reachable `NodePort` services.
 
 ```yaml
 kubernetes:
   enabled: false
+  inventory: false
   kubeconfig: ""
   context: ""
   timeout: 10s
@@ -349,6 +356,7 @@ kubernetes:
 ```text
 Path resolution order when Kubernetes mode is enabled: --kubeconfig, config file, KUBECONFIG, then ~/.kube/config.
 Use --kube-context when the kubeconfig contains multiple contexts.
+Use --kube-inventory to turn authenticated cluster access into scan targets.
 ```
 
 ## Flags
@@ -385,6 +393,7 @@ Use --kube-context when the kubeconfig contains multiple contexts.
 | `--aws-delta-only` | Scan only added/changed AWS targets when a previous snapshot is available |
 | `--kubeconfig` | Path to kubeconfig for Kubernetes validation |
 | `--kube-context` | Optional kubeconfig context to use |
+| `--kube-inventory` | Enumerate externally reachable Kubernetes resources from the selected cluster |
 | `--passive-only` | Skip brute-force, use passive sources only |
 | `--subdomains-only` | Print discovered subdomains and exit (no port scan) |
 | `--subfinder-sources` | Comma-separated passive sources override |
