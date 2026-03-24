@@ -79,6 +79,9 @@ func TestLoadConfigMissingFileUsesDefaults(t *testing.T) {
 	if cfg.Kubernetes.Kubeconfig != "" {
 		t.Fatalf("unexpected default kubernetes kubeconfig: %q", cfg.Kubernetes.Kubeconfig)
 	}
+	if cfg.Kubernetes.Inventory {
+		t.Fatal("unexpected default kubernetes inventory to be true")
+	}
 	if cfg.Kubernetes.Context != "" {
 		t.Fatalf("unexpected default kubernetes context: %q", cfg.Kubernetes.Context)
 	}
@@ -138,6 +141,7 @@ aws:
   delta_only: true
 kubernetes:
   enabled: true
+  inventory: true
   kubeconfig: /tmp/test-kubeconfig
   context: prod-cluster
   timeout: 9s
@@ -251,6 +255,9 @@ kubernetes:
 	}
 	if !cfg.Kubernetes.Enabled {
 		t.Fatal("expected kubernetes enabled override to be true")
+	}
+	if !cfg.Kubernetes.Inventory {
+		t.Fatal("expected kubernetes inventory override to be true")
 	}
 	if cfg.Kubernetes.Kubeconfig != "/tmp/test-kubeconfig" {
 		t.Fatalf("unexpected kubernetes kubeconfig override: %s", cfg.Kubernetes.Kubeconfig)

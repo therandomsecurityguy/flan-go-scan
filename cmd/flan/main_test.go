@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"reflect"
 	"testing"
 	"time"
@@ -70,47 +71,82 @@ func TestSplitCSV(t *testing.T) {
 func TestSelectKubernetesOptions(t *testing.T) {
 	cfg := &config.Config{}
 
-	opts, enabled := selectKubernetesOptions(map[string]bool{}, cfg, "", "")
+	opts, enabled := selectKubernetesOptions(map[string]bool{}, cfg, "", "", false)
 	if enabled {
 		t.Fatal("did not expect kubernetes mode enabled by default")
 	}
-	if opts.kubeconfig != "" || opts.context != "" {
+	if opts.kubeconfig != "" || opts.context != "" || opts.inventory {
 		t.Fatalf("unexpected default kube opts: %+v", opts)
 	}
 
 	cfg.Kubernetes.Enabled = true
 	cfg.Kubernetes.Kubeconfig = "/tmp/config"
 	cfg.Kubernetes.Context = "prod"
-	opts, enabled = selectKubernetesOptions(map[string]bool{}, cfg, "", "")
+	cfg.Kubernetes.Inventory = true
+	opts, enabled = selectKubernetesOptions(map[string]bool{}, cfg, "", "", false)
 	if !enabled {
 		t.Fatal("expected kubernetes mode enabled from config")
 	}
-	if opts.kubeconfig != "/tmp/config" || opts.context != "prod" {
+	if opts.kubeconfig != "/tmp/config" || opts.context != "prod" || !opts.inventory {
 		t.Fatalf("unexpected config kube opts: %+v", opts)
 	}
 
-	opts, enabled = selectKubernetesOptions(map[string]bool{"kubeconfig": true, "kube-context": true}, cfg, "/tmp/override", "staging")
+	opts, enabled = selectKubernetesOptions(map[string]bool{"kubeconfig": true, "kube-context": true, "kube-inventory": true}, cfg, "/tmp/override", "staging", false)
 	if !enabled {
 		t.Fatal("expected kubernetes mode enabled from flags")
 	}
-	if opts.kubeconfig != "/tmp/override" || opts.context != "staging" {
+	if opts.kubeconfig != "/tmp/override" || opts.context != "staging" || opts.inventory {
 		t.Fatalf("unexpected overridden kube opts: %+v", opts)
 	}
 }
 
 func TestValidationOnlyKubernetesMode(t *testing.T) {
-	if !validationOnlyKubernetesMode(map[string]bool{}, "", false, false, false) {
+	if !validationOnlyKubernetesMode(map[string]bool{}, "", false, false, false, false) {
 		t.Fatal("expected validation-only kubernetes mode without explicit scan inputs")
 	}
-	if validationOnlyKubernetesMode(map[string]bool{"list": true}, "", false, false, false) {
+	if validationOnlyKubernetesMode(map[string]bool{"list": true}, "", false, false, false, false) {
 		t.Fatal("did not expect validation-only mode when a list is explicitly requested")
 	}
-	if validationOnlyKubernetesMode(map[string]bool{}, "example.com", false, false, false) {
+	if validationOnlyKubernetesMode(map[string]bool{}, "example.com", false, false, false, false) {
 		t.Fatal("did not expect validation-only mode with domain scanning enabled")
 	}
-	if validationOnlyKubernetesMode(map[string]bool{}, "", false, false, true) {
+	if validationOnlyKubernetesMode(map[string]bool{}, "", false, false, false, true) {
 		t.Fatal("did not expect validation-only mode with fingerprint-only targets")
 	}
+	if validationOnlyKubernetesMode(map[string]bool{}, "", false, false, true, false) {
+		t.Fatal("did not expect validation-only mode when kubernetes inventory is enabled")
+	}
+}
+
+func TestDiscoverAliveTargetsUsesExactPort(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, err := ln.Accept()
+		if err == nil {
+			_ = conn.Close()
+		}
+	}()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	targets := []scanTarget{{
+		IP:            "127.0.0.1",
+		Port:          port,
+		ExactPort:     true,
+		CheckpointKey: "127.0.0.1",
+	}}
+
+	alive := discoverAliveTargets(t.Context(), targets, []int{1}, 1, time.Second)
+	if len(alive) != 1 {
+		t.Fatalf("expected exact-port target to remain alive, got %d targets", len(alive))
+	}
+	<-done
 }
 
 func TestNormalizeDiscoveredHosts(t *testing.T) {

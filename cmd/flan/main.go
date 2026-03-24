@@ -103,6 +103,7 @@ func usage() {
 		{"--aws-delta-only", "scan only added/changed AWS targets when a previous snapshot is available"},
 		{"--kubeconfig string", "path to kubeconfig for Kubernetes validation"},
 		{"--kube-context string", "optional kubeconfig context to use"},
+		{"--kube-inventory", "enumerate externally reachable Kubernetes resources from the selected cluster"},
 		{"--passive-only", "skip brute-force, use passive sources only"},
 		{"--subdomains-only", "print discovered subdomains and exit (subfinder-style)"},
 		{"--subfinder-sources string", "comma-separated passive sources override"},
@@ -137,6 +138,7 @@ func usage() {
 		"flan --cloudflare --cloudflare-zones example.net --cloudflare-include api.example.net",
 		"AWS_PROFILE=<profile> flan --aws --aws-regions us-west-2",
 		"flan --kubeconfig ~/.kube/config --kube-context prod-cluster",
+		"flan --kubeconfig ~/.kube/config --kube-context prod-cluster --kube-inventory",
 		"flan -d example.net --subdomains-only",
 		`echo "10.0.0.0/24" | flan -l -`,
 	}
@@ -303,6 +305,7 @@ func main() {
 	awsDeltaOnly := flag.Bool("aws-delta-only", false, "")
 	kubeconfigFlag := flag.String("kubeconfig", "", "")
 	kubeContextFlag := flag.String("kube-context", "", "")
+	kubeInventoryFlag := flag.Bool("kube-inventory", false, "")
 	passiveOnly := flag.Bool("passive-only", false, "")
 	subdomainsOnly := flag.Bool("subdomains-only", false, "")
 	subfinderSources := flag.String("subfinder-sources", "", "")
@@ -398,9 +401,13 @@ func main() {
 	}
 	cloudflareEnabled := *cloudflareFlag || cfg.Cloudflare.Enabled
 	awsEnabled := *awsFlag || cfg.AWS.Enabled
-	kubeOpts, kubeEnabled := selectKubernetesOptions(set, cfg, *kubeconfigFlag, *kubeContextFlag)
+	kubeOpts, kubeEnabled := selectKubernetesOptions(set, cfg, *kubeconfigFlag, *kubeContextFlag, *kubeInventoryFlag)
 	if *fingerprintOnly && (dom != "" || cloudflareEnabled || awsEnabled || *subdomainsOnly) {
 		slog.Error("--fingerprint-only only supports manual -t/-l host:port inputs")
+		os.Exit(1)
+	}
+	if kubeOpts.inventory && *fingerprintOnly {
+		slog.Error("--kube-inventory cannot be combined with --fingerprint-only")
 		os.Exit(1)
 	}
 	if *subdomainsOnly && dom == "" && !cloudflareEnabled && !awsEnabled {
@@ -463,18 +470,39 @@ func main() {
 	noTargetsFromDelta := false
 
 	if kubeEnabled {
-		target, err := kubeprovider.NewClient(cfg.Kubernetes.Timeout).Validate(ctx, kubeprovider.ValidateOptions{
-			Kubeconfig: kubeOpts.kubeconfig,
-			Context:    kubeOpts.context,
-		})
-		if err != nil {
-			slog.Error("kubernetes validation failed", "err", err)
-			os.Exit(1)
-		}
-		slog.Info("kubernetes cluster validated", "context", target.Context, "cluster", target.Cluster, "server", target.Server)
-		if validationOnlyKubernetesMode(set, dom, cloudflareEnabled, awsEnabled, *fingerprintOnly) {
-			slog.Info("no scan targets requested; kubeconfig validation complete")
-			return
+		kubeClient := kubeprovider.NewClient(cfg.Kubernetes.Timeout)
+		if kubeOpts.inventory {
+			target, items, err := kubeClient.Inventory(ctx, kubeprovider.ValidateOptions{
+				Kubeconfig: kubeOpts.kubeconfig,
+				Context:    kubeOpts.context,
+			})
+			if err != nil {
+				slog.Error("kubernetes inventory failed", "err", err)
+				os.Exit(1)
+			}
+			slog.Info("kubernetes cluster validated", "context", target.Context, "cluster", target.Cluster, "server", target.Server)
+			for _, item := range items {
+				endpointTargets = append(endpointTargets, scanner.EndpointTarget{Host: item.Host, Port: item.Port})
+			}
+			slog.Info("kubernetes inventory complete", "resources", len(items), "scan_targets", len(endpointTargets))
+			if len(items) == 0 && tgt == "" && dom == "" && !cloudflareEnabled && !awsEnabled && !set["list"] && !set["l"] {
+				slog.Info("no externally reachable kubernetes resources found")
+				return
+			}
+		} else {
+			target, err := kubeClient.Validate(ctx, kubeprovider.ValidateOptions{
+				Kubeconfig: kubeOpts.kubeconfig,
+				Context:    kubeOpts.context,
+			})
+			if err != nil {
+				slog.Error("kubernetes validation failed", "err", err)
+				os.Exit(1)
+			}
+			slog.Info("kubernetes cluster validated", "context", target.Context, "cluster", target.Cluster, "server", target.Server)
+			if validationOnlyKubernetesMode(set, dom, cloudflareEnabled, awsEnabled, kubeOpts.inventory, *fingerprintOnly) {
+				slog.Info("no scan targets requested; kubeconfig validation complete")
+				return
+			}
 		}
 	}
 
@@ -767,7 +795,7 @@ func main() {
 			slog.Info("TXT records", "records", txtRecords)
 		}
 	}
-	if tgt == "" && dom == "" && !cloudflareEnabled && !awsEnabled {
+	if tgt == "" && dom == "" && !cloudflareEnabled && !awsEnabled && len(endpointTargets) == 0 {
 		if *fingerprintOnly {
 			var r *os.File
 			if ipsFile == "-" {
@@ -810,10 +838,7 @@ func main() {
 		slog.Error("no hosts to scan, provide -t, -d, -l, --cloudflare, or --aws")
 		os.Exit(1)
 	}
-	inputTargets := len(hosts)
-	if *fingerprintOnly {
-		inputTargets = len(endpointTargets)
-	}
+	inputTargets := len(hosts) + len(endpointTargets)
 
 	var ports []int
 	if !*fingerprintOnly {
@@ -822,7 +847,15 @@ func main() {
 			slog.Error("invalid port configuration", "err", err)
 			os.Exit(1)
 		}
-		if err := enforceScanGuardrails(len(hosts), len(ports), cfg); err != nil {
+		inputCount := len(hosts) + len(endpointTargets)
+		if inputCount == 0 {
+			inputCount = len(hosts)
+		}
+		guardPortCount := len(ports)
+		if guardPortCount == 0 && len(endpointTargets) > 0 {
+			guardPortCount = 1
+		}
+		if err := enforceScanGuardrails(inputCount, guardPortCount, cfg); err != nil {
 			slog.Error("scan blocked by guardrails", "err", err)
 			os.Exit(1)
 		}
@@ -860,11 +893,11 @@ func main() {
 		resolveInputs = append(resolveInputs, resolveInput{Host: host})
 	}
 	for _, endpoint := range endpointTargets {
-		resolveInputs = append(resolveInputs, resolveInput{Host: endpoint.Host, Port: endpoint.Port})
+		resolveInputs = append(resolveInputs, resolveInput{Host: endpoint.Host, Port: endpoint.Port, ExactPort: true})
 	}
 	targets := resolveTargets(ctx, resolveInputs, dnsCache, *asnFlag, cfg.Scan.Timeout, res, cfg.Scan.Workers)
 	guardPorts := len(ports)
-	if *fingerprintOnly {
+	if *fingerprintOnly || len(endpointTargets) > 0 {
 		guardPorts = 1
 	}
 	if err := enforceScanGuardrails(len(targets), guardPorts, cfg); err != nil {
@@ -884,7 +917,7 @@ func main() {
 	}
 	aliveTargets := len(targets)
 	metaInput := scanMetadataInput{
-		mode:            scanMode(dom != "", cloudflareEnabled, awsEnabled),
+		mode:            scanMode(dom != "", cloudflareEnabled, awsEnabled, kubeOpts.inventory),
 		inputTargets:    inputTargets,
 		resolvedTargets: resolvedTargets,
 		aliveTargets:    aliveTargets,
@@ -1012,7 +1045,7 @@ func main() {
 		cdn := cdnHosts[target.IP]
 		targetKey := target.CheckpointKey
 		hostPorts := make([]int, 0, len(ports))
-		if *fingerprintOnly {
+		if target.ExactPort {
 			if target.Port > 0 && !checkpoint.ShouldSkip(targetKey, target.Port) {
 				hostPorts = append(hostPorts, target.Port)
 			}
@@ -1486,12 +1519,14 @@ func splitCSV(input string) []string {
 type kubernetesOptions struct {
 	kubeconfig string
 	context    string
+	inventory  bool
 }
 
-func selectKubernetesOptions(set map[string]bool, cfg *config.Config, kubeconfigFlag string, kubeContextFlag string) (kubernetesOptions, bool) {
+func selectKubernetesOptions(set map[string]bool, cfg *config.Config, kubeconfigFlag string, kubeContextFlag string, kubeInventoryFlag bool) (kubernetesOptions, bool) {
 	opts := kubernetesOptions{
 		kubeconfig: strings.TrimSpace(cfg.Kubernetes.Kubeconfig),
 		context:    strings.TrimSpace(cfg.Kubernetes.Context),
+		inventory:  cfg.Kubernetes.Inventory,
 	}
 	if set["kubeconfig"] {
 		opts.kubeconfig = strings.TrimSpace(kubeconfigFlag)
@@ -1499,15 +1534,20 @@ func selectKubernetesOptions(set map[string]bool, cfg *config.Config, kubeconfig
 	if set["kube-context"] {
 		opts.context = strings.TrimSpace(kubeContextFlag)
 	}
+	if set["kube-inventory"] {
+		opts.inventory = kubeInventoryFlag
+	}
 	enabled := cfg.Kubernetes.Enabled ||
+		opts.inventory ||
 		set["kubeconfig"] ||
 		set["kube-context"] ||
+		set["kube-inventory"] ||
 		opts.kubeconfig != "" ||
 		opts.context != ""
 	return opts, enabled
 }
 
-func validationOnlyKubernetesMode(set map[string]bool, domain string, cloudflareEnabled bool, awsEnabled bool, fingerprintOnly bool) bool {
+func validationOnlyKubernetesMode(set map[string]bool, domain string, cloudflareEnabled bool, awsEnabled bool, kubeInventory bool, fingerprintOnly bool) bool {
 	return !set["target"] &&
 		!set["t"] &&
 		!set["list"] &&
@@ -1515,6 +1555,7 @@ func validationOnlyKubernetesMode(set map[string]bool, domain string, cloudflare
 		domain == "" &&
 		!cloudflareEnabled &&
 		!awsEnabled &&
+		!kubeInventory &&
 		!fingerprintOnly
 }
 
@@ -1585,6 +1626,7 @@ type scanTarget struct {
 	Hostname      string
 	IP            string
 	Port          int
+	ExactPort     bool
 	ASN           string
 	Org           string
 	PTR           string
@@ -1592,8 +1634,9 @@ type scanTarget struct {
 }
 
 type resolveInput struct {
-	Host string
-	Port int
+	Host      string
+	Port      int
+	ExactPort bool
 }
 
 func resolveTargets(
@@ -1678,6 +1721,7 @@ func resolveTargets(
 						Hostname:      hostname,
 						IP:            ipStr,
 						Port:          input.Port,
+						ExactPort:     input.ExactPort,
 						CheckpointKey: targetCheckpointKey(hostname, ipStr),
 					}
 					if asnEnabled {
@@ -1715,7 +1759,7 @@ sendLoop:
 	targets := make([]scanTarget, 0, len(inputs))
 	for target := range targetCh {
 		key := target.CheckpointKey
-		if target.Port > 0 {
+		if target.ExactPort && target.Port > 0 {
 			key = fmt.Sprintf("%s:%d", key, target.Port)
 		}
 		if _, exists := seen[key]; exists {
@@ -1741,17 +1785,33 @@ func targetCheckpointKey(hostname, ip string) string {
 }
 
 func discoverAliveTargets(ctx context.Context, targets []scanTarget, ports []int, workers int, timeout time.Duration) []scanTarget {
-	seenIPs := make(map[string]struct{}, len(targets))
-	var ips []string
+	probesByIP := make(map[string]map[int]struct{}, len(targets))
 	for _, target := range targets {
-		if _, exists := seenIPs[target.IP]; exists {
+		portSet := probesByIP[target.IP]
+		if portSet == nil {
+			portSet = make(map[int]struct{}, len(ports)+1)
+			probesByIP[target.IP] = portSet
+		}
+		if target.ExactPort && target.Port > 0 {
+			portSet[target.Port] = struct{}{}
 			continue
 		}
-		seenIPs[target.IP] = struct{}{}
-		ips = append(ips, target.IP)
+		for _, port := range ports {
+			portSet[port] = struct{}{}
+		}
 	}
 
-	aliveIPs := discoverAliveHosts(ctx, ips, ports, workers, timeout)
+	probes := make([]discoveryProbe, 0, len(probesByIP))
+	for ip, portSet := range probesByIP {
+		probePorts := make([]int, 0, len(portSet))
+		for port := range portSet {
+			probePorts = append(probePorts, port)
+		}
+		sort.Ints(probePorts)
+		probes = append(probes, discoveryProbe{ip: ip, ports: probePorts})
+	}
+
+	aliveIPs := discoverAliveHosts(ctx, probes, workers, timeout)
 	aliveSet := make(map[string]struct{}, len(aliveIPs))
 	for _, ip := range aliveIPs {
 		aliveSet[ip] = struct{}{}
@@ -1766,24 +1826,29 @@ func discoverAliveTargets(ctx context.Context, targets []scanTarget, ports []int
 	return filtered
 }
 
-func discoverAliveHosts(ctx context.Context, ips []string, ports []int, workers int, timeout time.Duration) []string {
-	slog.Info("running host discovery", "targets", len(ips))
+type discoveryProbe struct {
+	ip    string
+	ports []int
+}
+
+func discoverAliveHosts(ctx context.Context, probes []discoveryProbe, workers int, timeout time.Duration) []string {
+	slog.Info("running host discovery", "targets", len(probes))
 	type aliveResult struct {
 		ip    string
 		alive bool
 	}
-	results := make(chan aliveResult, len(ips))
+	results := make(chan aliveResult, len(probes))
 	discoveryPool := scanner.NewWorkerPool(workers)
 	var discoveryWg sync.WaitGroup
 
-	for _, ip := range ips {
+	for _, probe := range probes {
 		discoveryPool.Acquire()
 		discoveryWg.Add(1)
-		go func(ip string) {
+		go func(probe discoveryProbe) {
 			defer discoveryWg.Done()
 			defer discoveryPool.Release()
-			results <- aliveResult{ip: ip, alive: scanner.IsHostAlive(ctx, ip, ports, timeout)}
-		}(ip)
+			results <- aliveResult{ip: probe.ip, alive: scanner.IsHostAlive(ctx, probe.ip, probe.ports, timeout)}
+		}(probe)
 	}
 	discoveryWg.Wait()
 	close(results)
@@ -1794,7 +1859,7 @@ func discoverAliveHosts(ctx context.Context, ips []string, ports []int, workers 
 			alive = append(alive, r.ip)
 		}
 	}
-	slog.Info("host discovery complete", "alive", len(alive), "filtered", len(ips)-len(alive))
+	slog.Info("host discovery complete", "alive", len(alive), "filtered", len(probes)-len(alive))
 	return alive
 }
 
@@ -2087,20 +2152,36 @@ func enforceScanGuardrails(targetCount, portCount int, cfg *config.Config) error
 	return nil
 }
 
-func scanMode(domainMode bool, cloudflareMode bool, awsMode bool) string {
+func scanMode(domainMode bool, cloudflareMode bool, awsMode bool, kubernetesMode bool) string {
 	switch {
+	case domainMode && cloudflareMode && awsMode && kubernetesMode:
+		return "aws+cloudflare+domain+kubernetes"
 	case domainMode && cloudflareMode && awsMode:
 		return "aws+cloudflare+domain"
+	case domainMode && awsMode && kubernetesMode:
+		return "aws+domain+kubernetes"
+	case domainMode && cloudflareMode && kubernetesMode:
+		return "cloudflare+domain+kubernetes"
+	case cloudflareMode && awsMode && kubernetesMode:
+		return "aws+cloudflare+kubernetes"
 	case domainMode && cloudflareMode:
 		return "cloudflare+domain"
 	case domainMode && awsMode:
 		return "aws+domain"
+	case domainMode && kubernetesMode:
+		return "domain+kubernetes"
 	case cloudflareMode && awsMode:
 		return "aws+cloudflare"
+	case awsMode && kubernetesMode:
+		return "aws+kubernetes"
+	case cloudflareMode && kubernetesMode:
+		return "cloudflare+kubernetes"
 	case awsMode:
 		return "aws"
 	case cloudflareMode:
 		return "cloudflare"
+	case kubernetesMode:
+		return "kubernetes"
 	case domainMode:
 		return "domain"
 	default:

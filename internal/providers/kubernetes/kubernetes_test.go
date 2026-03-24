@@ -9,9 +9,15 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestValidateUsesDefaultContext(t *testing.T) {
@@ -92,6 +98,82 @@ func TestResolveUsesKubeconfigEnvFallback(t *testing.T) {
 	}
 	if cfg.Host != server.URL {
 		t.Fatalf("unexpected host: %s", cfg.Host)
+	}
+}
+
+func TestInventoryFromClient(t *testing.T) {
+	clientset := fake.NewSimpleClientset(
+		&networkingv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "prod"},
+			Spec: networkingv1.IngressSpec{
+				Rules: []networkingv1.IngressRule{{Host: "app.example.com"}},
+				TLS:   []networkingv1.IngressTLS{{Hosts: []string{"app.example.com"}}},
+			},
+			Status: networkingv1.IngressStatus{
+				LoadBalancer: networkingv1.IngressLoadBalancerStatus{
+					Ingress: []networkingv1.IngressLoadBalancerIngress{{Hostname: "alb.example.com"}},
+				},
+			},
+		},
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "public-api", Namespace: "prod"},
+			Spec: corev1.ServiceSpec{
+				Type: corev1.ServiceTypeLoadBalancer,
+				Ports: []corev1.ServicePort{
+					{Port: 443, Protocol: corev1.ProtocolTCP},
+				},
+			},
+			Status: corev1.ServiceStatus{
+				LoadBalancer: corev1.LoadBalancerStatus{
+					Ingress: []corev1.LoadBalancerIngress{{Hostname: "api-lb.example.com"}},
+				},
+			},
+		},
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "node-app", Namespace: "prod"},
+			Spec: corev1.ServiceSpec{
+				Type: corev1.ServiceTypeNodePort,
+				Ports: []corev1.ServicePort{
+					{NodePort: 32080, Protocol: corev1.ProtocolTCP},
+				},
+			},
+		},
+		&corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{Name: "node-1"},
+			Status: corev1.NodeStatus{
+				Addresses: []corev1.NodeAddress{{Type: corev1.NodeExternalIP, Address: "34.1.2.3"}},
+			},
+		},
+	)
+
+	target := Target{
+		Context: "prod",
+		Cluster: "prod-cluster",
+		Server:  "https://api.cluster.example.com:6443",
+	}
+
+	items, err := inventoryFromClient(t.Context(), target, clientset)
+	if err != nil {
+		t.Fatalf("inventoryFromClient returned error: %v", err)
+	}
+
+	want := map[string]struct{}{
+		"api.cluster.example.com:6443": {},
+		"app.example.com:80":           {},
+		"app.example.com:443":          {},
+		"alb.example.com:80":           {},
+		"alb.example.com:443":          {},
+		"api-lb.example.com:443":       {},
+		"34.1.2.3:32080":               {},
+	}
+	got := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		got[item.Host+":"+itoa(item.Port)] = struct{}{}
+	}
+	for key := range want {
+		if _, ok := got[key]; !ok {
+			t.Fatalf("missing inventory item %s in %v", key, got)
+		}
 	}
 }
 
@@ -189,4 +271,8 @@ users:
 func encodeCertAuthority(cert *x509.Certificate) string {
 	pemBlock := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
 	return base64.StdEncoding.EncodeToString(pemBlock)
+}
+
+func itoa(v int) string {
+	return strconv.Itoa(v)
 }
