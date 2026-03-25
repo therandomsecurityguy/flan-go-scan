@@ -71,11 +71,11 @@ func TestSplitCSV(t *testing.T) {
 func TestSelectKubernetesOptions(t *testing.T) {
 	cfg := &config.Config{}
 
-	opts, enabled := selectKubernetesOptions(map[string]bool{}, cfg, "", "", false)
+	opts, enabled := selectKubernetesOptions(map[string]bool{}, cfg, "", "", false, "", "", false)
 	if enabled {
 		t.Fatal("did not expect kubernetes mode enabled by default")
 	}
-	if opts.kubeconfig != "" || opts.context != "" || opts.inventory {
+	if opts.kubeconfig != "" || opts.context != "" || opts.inventory || opts.inventoryOut != "" || opts.diffAgainst != "" || opts.deltaOnly {
 		t.Fatalf("unexpected default kube opts: %+v", opts)
 	}
 
@@ -83,19 +83,25 @@ func TestSelectKubernetesOptions(t *testing.T) {
 	cfg.Kubernetes.Kubeconfig = "/tmp/config"
 	cfg.Kubernetes.Context = "prod"
 	cfg.Kubernetes.Inventory = true
-	opts, enabled = selectKubernetesOptions(map[string]bool{}, cfg, "", "", false)
+	cfg.Kubernetes.InventoryOut = "./reports/kube.json"
+	cfg.Kubernetes.DiffAgainst = "./reports/kube-prev.json"
+	cfg.Kubernetes.DeltaOnly = true
+	opts, enabled = selectKubernetesOptions(map[string]bool{}, cfg, "", "", false, "", "", false)
 	if !enabled {
 		t.Fatal("expected kubernetes mode enabled from config")
 	}
-	if opts.kubeconfig != "/tmp/config" || opts.context != "prod" || !opts.inventory {
+	if opts.kubeconfig != "/tmp/config" || opts.context != "prod" || !opts.inventory || opts.inventoryOut != "./reports/kube.json" || opts.diffAgainst != "./reports/kube-prev.json" || !opts.deltaOnly {
 		t.Fatalf("unexpected config kube opts: %+v", opts)
 	}
 
-	opts, enabled = selectKubernetesOptions(map[string]bool{"kubeconfig": true, "kube-context": true, "kube-inventory": true}, cfg, "/tmp/override", "staging", false)
+	opts, enabled = selectKubernetesOptions(map[string]bool{
+		"kubeconfig": true, "kube-context": true, "kube-inventory": true,
+		"kube-inventory-out": true, "kube-diff-against": true, "kube-delta-only": true,
+	}, cfg, "/tmp/override", "staging", false, "./reports/new.json", "./reports/old.json", false)
 	if !enabled {
 		t.Fatal("expected kubernetes mode enabled from flags")
 	}
-	if opts.kubeconfig != "/tmp/override" || opts.context != "staging" || opts.inventory {
+	if opts.kubeconfig != "/tmp/override" || opts.context != "staging" || !opts.inventory || opts.inventoryOut != "./reports/new.json" || opts.diffAgainst != "./reports/old.json" || opts.deltaOnly {
 		t.Fatalf("unexpected overridden kube opts: %+v", opts)
 	}
 }

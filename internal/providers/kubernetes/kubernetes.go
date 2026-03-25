@@ -49,6 +49,34 @@ type InventoryItem struct {
 	Exposure  string
 }
 
+type InventorySnapshot struct {
+	GeneratedAt   string          `json:"generated_at"`
+	Source        string          `json:"source"`
+	Cluster       string          `json:"cluster"`
+	Context       string          `json:"context"`
+	Server        string          `json:"server"`
+	ResourceCount int             `json:"resource_count"`
+	Resources     []InventoryItem `json:"resources"`
+}
+
+type InventoryDiff struct {
+	GeneratedAt         string                `json:"generated_at"`
+	Source              string                `json:"source"`
+	PreviousGeneratedAt string                `json:"previous_generated_at,omitempty"`
+	CurrentGeneratedAt  string                `json:"current_generated_at,omitempty"`
+	AddedCount          int                   `json:"added_count"`
+	RemovedCount        int                   `json:"removed_count"`
+	ChangedCount        int                   `json:"changed_count"`
+	Added               []InventoryItem       `json:"added,omitempty"`
+	Removed             []InventoryItem       `json:"removed,omitempty"`
+	Changed             []InventoryItemChange `json:"changed,omitempty"`
+}
+
+type InventoryItemChange struct {
+	Before InventoryItem `json:"before"`
+	After  InventoryItem `json:"after"`
+}
+
 func NewClient(timeout time.Duration) *Client {
 	if timeout <= 0 {
 		timeout = 10 * time.Second
@@ -84,6 +112,74 @@ func (c *Client) Inventory(ctx context.Context, opts ValidateOptions) (Target, [
 		return Target{}, nil, err
 	}
 	return target, items, nil
+}
+
+func BuildInventorySnapshot(now time.Time, target Target, items []InventoryItem) InventorySnapshot {
+	resources := append([]InventoryItem(nil), items...)
+	sortInventoryItems(resources)
+	return InventorySnapshot{
+		GeneratedAt:   now.UTC().Format(time.RFC3339),
+		Source:        "kubernetes",
+		Cluster:       target.Cluster,
+		Context:       target.Context,
+		Server:        target.Server,
+		ResourceCount: len(resources),
+		Resources:     resources,
+	}
+}
+
+func DiffInventory(now time.Time, previous, current InventorySnapshot) InventoryDiff {
+	prevByKey := make(map[string]InventoryItem, len(previous.Resources))
+	currByKey := make(map[string]InventoryItem, len(current.Resources))
+	for _, item := range previous.Resources {
+		prevByKey[itemChangeKey(item)] = item
+	}
+	for _, item := range current.Resources {
+		currByKey[itemChangeKey(item)] = item
+	}
+
+	diff := InventoryDiff{
+		GeneratedAt:         now.UTC().Format(time.RFC3339),
+		Source:              "kubernetes",
+		PreviousGeneratedAt: previous.GeneratedAt,
+		CurrentGeneratedAt:  current.GeneratedAt,
+	}
+
+	for key, currentItem := range currByKey {
+		previousItem, ok := prevByKey[key]
+		if !ok {
+			diff.Added = append(diff.Added, currentItem)
+			continue
+		}
+		if itemIdentity(previousItem) != itemIdentity(currentItem) {
+			diff.Changed = append(diff.Changed, InventoryItemChange{Before: previousItem, After: currentItem})
+		}
+	}
+
+	for key, previousItem := range prevByKey {
+		if _, ok := currByKey[key]; !ok {
+			diff.Removed = append(diff.Removed, previousItem)
+		}
+	}
+
+	sortInventoryItems(diff.Added)
+	sortInventoryItems(diff.Removed)
+	slices.SortFunc(diff.Changed, func(a, b InventoryItemChange) int {
+		return strings.Compare(itemKey(a.After), itemKey(b.After))
+	})
+
+	diff.AddedCount = len(diff.Added)
+	diff.RemovedCount = len(diff.Removed)
+	diff.ChangedCount = len(diff.Changed)
+	return diff
+}
+
+func ItemsFromDiff(diff InventoryDiff) []InventoryItem {
+	items := append([]InventoryItem(nil), diff.Added...)
+	for _, change := range diff.Changed {
+		items = append(items, change.After)
+	}
+	return dedupeInventoryItems(items)
 }
 
 func validateTarget(ctx context.Context, target Target, cfg *rest.Config, timeout time.Duration) error {
@@ -448,41 +544,14 @@ func dedupeInventoryItems(items []InventoryItem) []InventoryItem {
 		if item.Host == "" || item.Port <= 0 {
 			continue
 		}
-		key := strings.Join([]string{
-			item.Cluster,
-			item.Context,
-			item.Namespace,
-			item.Kind,
-			item.Name,
-			item.Host,
-			fmt.Sprintf("%d", item.Port),
-			item.Protocol,
-			item.Exposure,
-		}, "|")
+		key := itemIdentity(item)
 		if _, ok := seen[key]; ok {
 			continue
 		}
 		seen[key] = struct{}{}
 		out = append(out, item)
 	}
-	slices.SortFunc(out, func(a, b InventoryItem) int {
-		if a.Host != b.Host {
-			return strings.Compare(a.Host, b.Host)
-		}
-		if a.Port != b.Port {
-			if a.Port < b.Port {
-				return -1
-			}
-			return 1
-		}
-		if a.Namespace != b.Namespace {
-			return strings.Compare(a.Namespace, b.Namespace)
-		}
-		if a.Kind != b.Kind {
-			return strings.Compare(a.Kind, b.Kind)
-		}
-		return strings.Compare(a.Name, b.Name)
-	})
+	sortInventoryItems(out)
 	return out
 }
 
@@ -513,4 +582,30 @@ func resolvedKubeconfigPath(explicitPath string) string {
 		return envPath
 	}
 	return filepath.Join(clientcmd.RecommendedHomeDir, clientcmd.RecommendedFileName)
+}
+
+func sortInventoryItems(items []InventoryItem) {
+	slices.SortFunc(items, func(a, b InventoryItem) int {
+		return strings.Compare(itemKey(a), itemKey(b))
+	})
+}
+
+func itemChangeKey(item InventoryItem) string {
+	return strings.Join([]string{
+		item.Cluster,
+		item.Context,
+		item.Namespace,
+		item.Kind,
+		item.Name,
+		item.Host,
+		fmt.Sprintf("%d", item.Port),
+	}, "|")
+}
+
+func itemIdentity(item InventoryItem) string {
+	return itemChangeKey(item) + "|" + item.Protocol + "|" + item.Exposure
+}
+
+func itemKey(item InventoryItem) string {
+	return itemIdentity(item)
 }

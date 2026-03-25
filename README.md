@@ -206,6 +206,18 @@ Enumerate externally reachable Kubernetes resources from an authenticated cluste
 flan --kubeconfig ~/.kube/config --kube-context prod-cluster --kube-inventory
 ```
 
+Write a normalized Kubernetes inventory snapshot for later diffing:
+
+```bash
+flan --kubeconfig ~/.kube/config --kube-context prod-cluster --kube-inventory --kube-inventory-out reports/kubernetes-inventory.json
+```
+
+Scan only added or changed Kubernetes resources when a previous snapshot exists:
+
+```bash
+flan --kubeconfig ~/.kube/config --kube-context prod-cluster --kube-inventory --kube-inventory-out reports/kubernetes-inventory.json --kube-delta-only
+```
+
 Write a normalized Cloudflare inventory snapshot for later diffing:
 
 ```
@@ -351,12 +363,16 @@ kubernetes:
   kubeconfig: ""
   context: ""
   timeout: 10s
+  inventory_out: ""
+  diff_against: ""
+  delta_only: false
 ```
 
 ```text
 Path resolution order when Kubernetes mode is enabled: --kubeconfig, config file, KUBECONFIG, then ~/.kube/config.
 Use --kube-context when the kubeconfig contains multiple contexts.
 Use --kube-inventory to turn authenticated cluster access into scan targets.
+If --kube-diff-against is omitted but --kube-inventory-out is set, Flan reuses the inventory output path as the diff base.
 ```
 
 ## Flags
@@ -394,6 +410,9 @@ Use --kube-inventory to turn authenticated cluster access into scan targets.
 | `--kubeconfig` | Path to kubeconfig for Kubernetes validation |
 | `--kube-context` | Optional kubeconfig context to use |
 | `--kube-inventory` | Enumerate externally reachable Kubernetes resources from the selected cluster |
+| `--kube-inventory-out` | Write normalized Kubernetes inventory snapshot to this path |
+| `--kube-diff-against` | Compare the current Kubernetes inventory against a previous snapshot; defaults to `--kube-inventory-out` when omitted |
+| `--kube-delta-only` | Scan only added/changed Kubernetes resources when a previous snapshot is available |
 | `--passive-only` | Skip brute-force, use passive sources only |
 | `--subdomains-only` | Print discovered subdomains and exit (no port scan) |
 | `--subfinder-sources` | Comma-separated passive sources override |
