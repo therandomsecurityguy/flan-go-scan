@@ -104,6 +104,9 @@ func usage() {
 		{"--kubeconfig string", "path to kubeconfig for Kubernetes validation"},
 		{"--kube-context string", "optional kubeconfig context to use"},
 		{"--kube-inventory", "enumerate externally reachable Kubernetes resources from the selected cluster"},
+		{"--kube-inventory-out string", "write normalized Kubernetes inventory snapshot to this path"},
+		{"--kube-diff-against string", "compare the current Kubernetes inventory against a previous snapshot (defaults to --kube-inventory-out when omitted)"},
+		{"--kube-delta-only", "scan only added/changed Kubernetes resources when a previous snapshot is available"},
 		{"--passive-only", "skip brute-force, use passive sources only"},
 		{"--subdomains-only", "print discovered subdomains and exit (subfinder-style)"},
 		{"--subfinder-sources string", "comma-separated passive sources override"},
@@ -306,6 +309,9 @@ func main() {
 	kubeconfigFlag := flag.String("kubeconfig", "", "")
 	kubeContextFlag := flag.String("kube-context", "", "")
 	kubeInventoryFlag := flag.Bool("kube-inventory", false, "")
+	kubeInventoryOut := flag.String("kube-inventory-out", "", "")
+	kubeDiffAgainst := flag.String("kube-diff-against", "", "")
+	kubeDeltaOnly := flag.Bool("kube-delta-only", false, "")
 	passiveOnly := flag.Bool("passive-only", false, "")
 	subdomainsOnly := flag.Bool("subdomains-only", false, "")
 	subfinderSources := flag.String("subfinder-sources", "", "")
@@ -401,7 +407,7 @@ func main() {
 	}
 	cloudflareEnabled := *cloudflareFlag || cfg.Cloudflare.Enabled
 	awsEnabled := *awsFlag || cfg.AWS.Enabled
-	kubeOpts, kubeEnabled := selectKubernetesOptions(set, cfg, *kubeconfigFlag, *kubeContextFlag, *kubeInventoryFlag)
+	kubeOpts, kubeEnabled := selectKubernetesOptions(set, cfg, *kubeconfigFlag, *kubeContextFlag, *kubeInventoryFlag, *kubeInventoryOut, *kubeDiffAgainst, *kubeDeltaOnly)
 	if *fingerprintOnly && (dom != "" || cloudflareEnabled || awsEnabled || *subdomainsOnly) {
 		slog.Error("--fingerprint-only only supports manual -t/-l host:port inputs")
 		os.Exit(1)
@@ -481,12 +487,51 @@ func main() {
 				os.Exit(1)
 			}
 			slog.Info("kubernetes cluster validated", "context", target.Context, "cluster", target.Cluster, "server", target.Server)
-			for _, item := range items {
+			selectedItems := items
+			snapshot := kubeprovider.BuildInventorySnapshot(scanStarted, target, items)
+			diffAgainst := kubeOpts.diffAgainst
+			if diffAgainst == "" && kubeOpts.inventoryOut != "" {
+				diffAgainst = kubeOpts.inventoryOut
+				slog.Info("kubernetes inventory diff base defaults to inventory output", "path", diffAgainst)
+			}
+			if diffAgainst != "" {
+				previous, err := output.ReadKubernetesInventory(diffAgainst)
+				if err == nil {
+					diff := kubeprovider.DiffInventory(scanStarted, previous, snapshot)
+					slog.Info("kubernetes inventory diff", "added", diff.AddedCount, "removed", diff.RemovedCount, "changed", diff.ChangedCount)
+					if kubeOpts.deltaOnly {
+						selectedItems = kubeprovider.ItemsFromDiff(diff)
+						noTargetsFromDelta = len(selectedItems) == 0
+						slog.Info("kubernetes delta scan selection", "resources", len(selectedItems))
+					}
+					if path, err := output.WriteKubernetesInventoryDiff(cfg.Output.Directory, kubeOpts.inventoryOut, diff); err != nil {
+						slog.Warn("failed to write kubernetes inventory diff", "err", err)
+					} else if path != "" {
+						slog.Info("kubernetes inventory diff written", "path", path)
+					}
+				} else if !os.IsNotExist(err) {
+					slog.Warn("failed to read previous kubernetes inventory", "path", diffAgainst, "err", err)
+				} else if kubeOpts.deltaOnly {
+					slog.Info("kubernetes delta scan fallback to full inventory; previous snapshot not found", "path", diffAgainst)
+				}
+			} else if kubeOpts.deltaOnly {
+				slog.Info("kubernetes delta scan fallback to full inventory; no previous snapshot configured")
+			}
+			if path, err := output.WriteKubernetesInventory(cfg.Output.Directory, kubeOpts.inventoryOut, snapshot); err != nil {
+				slog.Warn("failed to write kubernetes inventory", "err", err)
+			} else if path != "" {
+				slog.Info("kubernetes inventory written", "path", path)
+			}
+			for _, item := range selectedItems {
 				endpointTargets = append(endpointTargets, scanner.EndpointTarget{Host: item.Host, Port: item.Port})
 			}
 			slog.Info("kubernetes inventory complete", "resources", len(items), "scan_targets", len(endpointTargets))
-			if len(items) == 0 && tgt == "" && dom == "" && !cloudflareEnabled && !awsEnabled && !set["list"] && !set["l"] {
-				slog.Info("no externally reachable kubernetes resources found")
+			if len(selectedItems) == 0 && tgt == "" && dom == "" && !cloudflareEnabled && !awsEnabled && !set["list"] && !set["l"] {
+				if kubeOpts.deltaOnly {
+					slog.Info("no delta targets to scan")
+				} else {
+					slog.Info("no externally reachable kubernetes resources found")
+				}
 				return
 			}
 		} else {
@@ -835,7 +880,7 @@ func main() {
 			slog.Info("no delta targets to scan")
 			return
 		}
-		slog.Error("no hosts to scan, provide -t, -d, -l, --cloudflare, or --aws")
+		slog.Error("no hosts to scan, provide -t, -d, -l, --cloudflare, --aws, or --kube-inventory")
 		os.Exit(1)
 	}
 	inputTargets := len(hosts) + len(endpointTargets)
@@ -1517,16 +1562,22 @@ func splitCSV(input string) []string {
 }
 
 type kubernetesOptions struct {
-	kubeconfig string
-	context    string
-	inventory  bool
+	kubeconfig   string
+	context      string
+	inventory    bool
+	inventoryOut string
+	diffAgainst  string
+	deltaOnly    bool
 }
 
-func selectKubernetesOptions(set map[string]bool, cfg *config.Config, kubeconfigFlag string, kubeContextFlag string, kubeInventoryFlag bool) (kubernetesOptions, bool) {
+func selectKubernetesOptions(set map[string]bool, cfg *config.Config, kubeconfigFlag string, kubeContextFlag string, kubeInventoryFlag bool, kubeInventoryOut string, kubeDiffAgainst string, kubeDeltaOnly bool) (kubernetesOptions, bool) {
 	opts := kubernetesOptions{
-		kubeconfig: strings.TrimSpace(cfg.Kubernetes.Kubeconfig),
-		context:    strings.TrimSpace(cfg.Kubernetes.Context),
-		inventory:  cfg.Kubernetes.Inventory,
+		kubeconfig:   strings.TrimSpace(cfg.Kubernetes.Kubeconfig),
+		context:      strings.TrimSpace(cfg.Kubernetes.Context),
+		inventory:    cfg.Kubernetes.Inventory,
+		inventoryOut: strings.TrimSpace(cfg.Kubernetes.InventoryOut),
+		diffAgainst:  strings.TrimSpace(cfg.Kubernetes.DiffAgainst),
+		deltaOnly:    cfg.Kubernetes.DeltaOnly,
 	}
 	if set["kubeconfig"] {
 		opts.kubeconfig = strings.TrimSpace(kubeconfigFlag)
@@ -1537,13 +1588,31 @@ func selectKubernetesOptions(set map[string]bool, cfg *config.Config, kubeconfig
 	if set["kube-inventory"] {
 		opts.inventory = kubeInventoryFlag
 	}
+	if set["kube-inventory-out"] {
+		opts.inventoryOut = strings.TrimSpace(kubeInventoryOut)
+	}
+	if set["kube-diff-against"] {
+		opts.diffAgainst = strings.TrimSpace(kubeDiffAgainst)
+	}
+	if set["kube-delta-only"] {
+		opts.deltaOnly = kubeDeltaOnly
+	}
+	if opts.inventoryOut != "" || opts.diffAgainst != "" || opts.deltaOnly {
+		opts.inventory = true
+	}
 	enabled := cfg.Kubernetes.Enabled ||
 		opts.inventory ||
 		set["kubeconfig"] ||
 		set["kube-context"] ||
 		set["kube-inventory"] ||
+		set["kube-inventory-out"] ||
+		set["kube-diff-against"] ||
+		set["kube-delta-only"] ||
 		opts.kubeconfig != "" ||
-		opts.context != ""
+		opts.context != "" ||
+		opts.inventoryOut != "" ||
+		opts.diffAgainst != "" ||
+		opts.deltaOnly
 	return opts, enabled
 }
 

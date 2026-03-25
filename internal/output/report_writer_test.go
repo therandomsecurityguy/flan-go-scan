@@ -9,6 +9,7 @@ import (
 
 	awsprovider "github.com/therandomsecurityguy/flan-go-scan/internal/providers/aws"
 	cfprovider "github.com/therandomsecurityguy/flan-go-scan/internal/providers/cloudflare"
+	kubeprovider "github.com/therandomsecurityguy/flan-go-scan/internal/providers/kubernetes"
 	"github.com/therandomsecurityguy/flan-go-scan/internal/scanner"
 )
 
@@ -274,5 +275,46 @@ func TestReadAWSInventoryAndDiff(t *testing.T) {
 	}
 	if _, err := os.Stat(diffPath); err != nil {
 		t.Fatalf("expected aws diff file: %v", err)
+	}
+}
+
+func TestReadKubernetesInventoryAndDiff(t *testing.T) {
+	dir := t.TempDir()
+	inventoryPath := filepath.Join(dir, "kubernetes.json")
+	expected := kubeprovider.InventorySnapshot{
+		GeneratedAt:   "2026-03-24T00:00:00Z",
+		Source:        "kubernetes",
+		Cluster:       "prod-cluster",
+		Context:       "prod",
+		Server:        "https://api.cluster.example.com:6443",
+		ResourceCount: 1,
+		Resources: []kubeprovider.InventoryItem{
+			{Cluster: "prod-cluster", Context: "prod", Namespace: "prod", Kind: "Ingress", Name: "web", Host: "app.example.com", Port: 443, Protocol: "https", Exposure: "ingress"},
+		},
+	}
+	if _, err := WriteKubernetesInventory("", inventoryPath, expected); err != nil {
+		t.Fatalf("WriteKubernetesInventory failed: %v", err)
+	}
+	got, err := ReadKubernetesInventory(inventoryPath)
+	if err != nil {
+		t.Fatalf("ReadKubernetesInventory failed: %v", err)
+	}
+	if got.ResourceCount != expected.ResourceCount || len(got.Resources) != len(expected.Resources) {
+		t.Fatalf("unexpected kubernetes inventory readback: %#v", got)
+	}
+
+	diffPath, err := WriteKubernetesInventoryDiff("", inventoryPath, kubeprovider.InventoryDiff{
+		GeneratedAt: "2026-03-24T01:00:00Z",
+		Source:      "kubernetes",
+		AddedCount:  1,
+	})
+	if err != nil {
+		t.Fatalf("WriteKubernetesInventoryDiff failed: %v", err)
+	}
+	if diffPath != filepath.Join(dir, "kubernetes-diff.json") {
+		t.Fatalf("unexpected kubernetes diff path: %s", diffPath)
+	}
+	if _, err := os.Stat(diffPath); err != nil {
+		t.Fatalf("expected kubernetes diff file: %v", err)
 	}
 }

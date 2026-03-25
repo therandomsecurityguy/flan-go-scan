@@ -88,6 +88,15 @@ func TestLoadConfigMissingFileUsesDefaults(t *testing.T) {
 	if cfg.Kubernetes.Timeout != 10*time.Second {
 		t.Fatalf("unexpected default kubernetes timeout: %v", cfg.Kubernetes.Timeout)
 	}
+	if cfg.Kubernetes.InventoryOut != "" {
+		t.Fatalf("unexpected default kubernetes inventory out: %q", cfg.Kubernetes.InventoryOut)
+	}
+	if cfg.Kubernetes.DiffAgainst != "" {
+		t.Fatalf("unexpected default kubernetes diff_against: %q", cfg.Kubernetes.DiffAgainst)
+	}
+	if cfg.Kubernetes.DeltaOnly {
+		t.Fatal("unexpected default kubernetes delta_only to be true")
+	}
 }
 
 func TestLoadConfigFromFileOverridesDefaults(t *testing.T) {
@@ -145,6 +154,9 @@ kubernetes:
   kubeconfig: /tmp/test-kubeconfig
   context: prod-cluster
   timeout: 9s
+  inventory_out: ./reports/kubernetes.json
+  diff_against: ./reports/kubernetes-prev.json
+  delta_only: true
 `
 	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -267,5 +279,14 @@ kubernetes:
 	}
 	if cfg.Kubernetes.Timeout != 9*time.Second {
 		t.Fatalf("unexpected kubernetes timeout override: %v", cfg.Kubernetes.Timeout)
+	}
+	if cfg.Kubernetes.InventoryOut != "./reports/kubernetes.json" {
+		t.Fatalf("unexpected kubernetes inventory_out override: %s", cfg.Kubernetes.InventoryOut)
+	}
+	if cfg.Kubernetes.DiffAgainst != "./reports/kubernetes-prev.json" {
+		t.Fatalf("unexpected kubernetes diff_against override: %s", cfg.Kubernetes.DiffAgainst)
+	}
+	if !cfg.Kubernetes.DeltaOnly {
+		t.Fatal("expected kubernetes delta_only override to be true")
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -174,6 +175,78 @@ func TestInventoryFromClient(t *testing.T) {
 		if _, ok := got[key]; !ok {
 			t.Fatalf("missing inventory item %s in %v", key, got)
 		}
+	}
+}
+
+func TestBuildInventorySnapshot(t *testing.T) {
+	target := Target{
+		Context: "prod",
+		Cluster: "prod-cluster",
+		Server:  "https://api.cluster.example.com:6443",
+	}
+	snapshot := BuildInventorySnapshot(time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC), target, []InventoryItem{
+		{Cluster: "prod-cluster", Context: "prod", Namespace: "prod", Kind: "Ingress", Name: "web", Host: "app.example.com", Port: 443, Protocol: "https", Exposure: "ingress"},
+	})
+
+	if snapshot.Source != "kubernetes" {
+		t.Fatalf("unexpected source: %s", snapshot.Source)
+	}
+	if snapshot.Cluster != target.Cluster || snapshot.Context != target.Context || snapshot.Server != target.Server {
+		t.Fatalf("unexpected target data in snapshot: %#v", snapshot)
+	}
+	if snapshot.ResourceCount != 1 || len(snapshot.Resources) != 1 {
+		t.Fatalf("unexpected snapshot resources: %#v", snapshot)
+	}
+}
+
+func TestDiffInventory(t *testing.T) {
+	previous := InventorySnapshot{
+		GeneratedAt: "2026-03-24T10:00:00Z",
+		Resources: []InventoryItem{
+			{Cluster: "prod-cluster", Context: "prod", Namespace: "prod", Kind: "Ingress", Name: "web", Host: "old.example.com", Port: 443, Protocol: "https", Exposure: "ingress"},
+			{Cluster: "prod-cluster", Context: "prod", Namespace: "prod", Kind: "Service", Name: "legacy", Host: "legacy.example.com", Port: 443, Protocol: "tcp", Exposure: "loadbalancer"},
+			{Cluster: "prod-cluster", Context: "prod", Namespace: "prod", Kind: "Service", Name: "node-app", Host: "34.1.2.3", Port: 32080, Protocol: "tcp", Exposure: "nodeport"},
+		},
+	}
+	current := InventorySnapshot{
+		GeneratedAt: "2026-03-24T11:00:00Z",
+		Resources: []InventoryItem{
+			{Cluster: "prod-cluster", Context: "prod", Namespace: "prod", Kind: "Ingress", Name: "web", Host: "new.example.com", Port: 443, Protocol: "https", Exposure: "ingress"},
+			{Cluster: "prod-cluster", Context: "prod", Namespace: "prod", Kind: "Service", Name: "node-app", Host: "34.1.2.3", Port: 32080, Protocol: "tcp", Exposure: "cluster-node"},
+			{Cluster: "prod-cluster", Context: "prod", Namespace: "prod", Kind: "APIServer", Name: "kubernetes", Host: "api.cluster.example.com", Port: 6443, Protocol: "https", Exposure: "cluster"},
+		},
+	}
+
+	diff := DiffInventory(time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC), previous, current)
+	if diff.AddedCount != 2 {
+		t.Fatalf("unexpected added count: %d", diff.AddedCount)
+	}
+	if diff.RemovedCount != 2 {
+		t.Fatalf("unexpected removed count: %d", diff.RemovedCount)
+	}
+	if diff.ChangedCount != 1 {
+		t.Fatalf("unexpected changed count: %d", diff.ChangedCount)
+	}
+}
+
+func TestItemsFromDiff(t *testing.T) {
+	diff := InventoryDiff{
+		Added: []InventoryItem{
+			{Host: "api.cluster.example.com", Port: 6443, Protocol: "https", Exposure: "cluster"},
+			{Host: "api.cluster.example.com", Port: 6443, Protocol: "https", Exposure: "cluster"},
+		},
+		Changed: []InventoryItemChange{
+			{After: InventoryItem{Host: "app.example.com", Port: 443, Protocol: "https", Exposure: "ingress"}},
+		},
+	}
+
+	got := ItemsFromDiff(diff)
+	want := []InventoryItem{
+		{Host: "api.cluster.example.com", Port: 6443, Protocol: "https", Exposure: "cluster"},
+		{Host: "app.example.com", Port: 443, Protocol: "https", Exposure: "ingress"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected diff items: got %#v want %#v", got, want)
 	}
 }
 

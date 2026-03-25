@@ -60,3 +60,6 @@ kubernetes:
   kubeconfig: ""
   context: ""
   timeout: 10s
+  inventory_out: ""
+  diff_against: ""
+  delta_only: false

@@ -70,11 +70,14 @@ type Config struct {
 		DeltaOnly    bool          `mapstructure:"delta_only"`
 	} `mapstructure:"aws"`
 	Kubernetes struct {
-		Enabled    bool          `mapstructure:"enabled"`
-		Inventory  bool          `mapstructure:"inventory"`
-		Kubeconfig string        `mapstructure:"kubeconfig"`
-		Context    string        `mapstructure:"context"`
-		Timeout    time.Duration `mapstructure:"timeout"`
+		Enabled      bool          `mapstructure:"enabled"`
+		Inventory    bool          `mapstructure:"inventory"`
+		Kubeconfig   string        `mapstructure:"kubeconfig"`
+		Context      string        `mapstructure:"context"`
+		Timeout      time.Duration `mapstructure:"timeout"`
+		InventoryOut string        `mapstructure:"inventory_out"`
+		DiffAgainst  string        `mapstructure:"diff_against"`
+		DeltaOnly    bool          `mapstructure:"delta_only"`
 	} `mapstructure:"kubernetes"`
 }
 
@@ -126,6 +129,9 @@ func defaults() *Config {
 	cfg.Kubernetes.Kubeconfig = ""
 	cfg.Kubernetes.Context = ""
 	cfg.Kubernetes.Timeout = 10 * time.Second
+	cfg.Kubernetes.InventoryOut = ""
+	cfg.Kubernetes.DiffAgainst = ""
+	cfg.Kubernetes.DeltaOnly = false
 	return cfg
 }
 
