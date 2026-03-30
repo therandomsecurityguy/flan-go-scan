@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -285,8 +284,8 @@ func crawlHTTP(ctx context.Context, scheme, ip, hostname string, port int, maxDe
 		crawlTimeout = 8 * time.Second
 	}
 	tlsCfg := &tls.Config{InsecureSkipVerify: !verifyTLS}
-	if hostname != "" && net.ParseIP(hostname) == nil {
-		tlsCfg.ServerName = hostname
+	if serverName := tlsServerName(ip, hostname); serverName != "" {
+		tlsCfg.ServerName = serverName
 	}
 	transport := &http.Transport{
 		TLSClientConfig: tlsCfg,
@@ -457,7 +456,8 @@ func fetchPath(ctx context.Context, client *http.Client, base, hostname, path st
 		}
 	}
 
-	if !strings.Contains(cr.ContentType, "text/") {
+	if !shouldReadHTTPBody(cr.ContentType) {
+		detectDeeperProduct(path, cr, resp.Header, "", fp, productsFound)
 		io.Copy(io.Discard, resp.Body) //nolint:errcheck
 		return cr, ""
 	}
@@ -723,6 +723,17 @@ func parseRobotsTxt(body string) []string {
 		}
 	}
 	return paths
+}
+
+func shouldReadHTTPBody(contentType string) bool {
+	lower := strings.ToLower(strings.TrimSpace(contentType))
+	if lower == "" {
+		return true
+	}
+	return strings.Contains(lower, "text/") ||
+		strings.Contains(lower, "json") ||
+		strings.Contains(lower, "javascript") ||
+		strings.Contains(lower, "xml")
 }
 
 func IsHTTPService(service string, port int, tls bool) bool {

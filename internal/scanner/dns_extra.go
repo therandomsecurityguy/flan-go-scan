@@ -10,37 +10,6 @@ import (
 	"github.com/miekg/dns"
 )
 
-type SRVRecord struct {
-	Service  string `json:"service"`
-	Target   string `json:"target"`
-	Port     uint16 `json:"port"`
-	Priority uint16 `json:"priority"`
-	Weight   uint16 `json:"weight"`
-}
-
-type SOARecord struct {
-	NS      string `json:"ns"`
-	MBox    string `json:"mbox"`
-	Serial  uint32 `json:"serial"`
-	Refresh uint32 `json:"refresh"`
-	Retry   uint32 `json:"retry"`
-	Expire  uint32 `json:"expire"`
-}
-
-type CAARecord struct {
-	Tag   string `json:"tag"`
-	Value string `json:"value"`
-}
-
-type DNSExtra struct {
-	PTR []string    `json:"ptr,omitempty"`
-	SRV []SRVRecord `json:"srv,omitempty"`
-	SOA *SOARecord  `json:"soa,omitempty"`
-	CAA []CAARecord `json:"caa,omitempty"`
-	ASN string      `json:"asn,omitempty"`
-	Org string      `json:"org,omitempty"`
-}
-
 const defaultDNSResolver = "8.8.8.8:53"
 
 func normalizeResolver(resolver string) string {
@@ -59,87 +28,10 @@ func LookupPTR(ip string) []string {
 	if err != nil {
 		return nil
 	}
-	for i, n := range names {
-		names[i] = strings.TrimSuffix(n, ".")
+	for i, name := range names {
+		names[i] = strings.TrimSuffix(name, ".")
 	}
 	return names
-}
-
-func LookupSRV(service, proto, domain string) []SRVRecord {
-	_, addrs, err := net.LookupSRV(service, proto, domain)
-	if err != nil {
-		return nil
-	}
-	records := make([]SRVRecord, 0, len(addrs))
-	for _, a := range addrs {
-		records = append(records, SRVRecord{
-			Service:  fmt.Sprintf("_%s._%s.%s", service, proto, domain),
-			Target:   a.Target,
-			Port:     a.Port,
-			Priority: a.Priority,
-			Weight:   a.Weight,
-		})
-	}
-	return records
-}
-
-func LookupSOA(ctx context.Context, domain string, timeout time.Duration, resolver string) *SOARecord {
-	c := new(dns.Client)
-	c.Timeout = timeout
-	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn(domain), dns.TypeSOA)
-	m.RecursionDesired = true
-
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	queryCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	r, _, err := c.ExchangeContext(queryCtx, m, normalizeResolver(resolver))
-	if err != nil || r == nil {
-		return nil
-	}
-	for _, ans := range r.Answer {
-		if soa, ok := ans.(*dns.SOA); ok {
-			return &SOARecord{
-				NS:      soa.Ns,
-				MBox:    soa.Mbox,
-				Serial:  soa.Serial,
-				Refresh: soa.Refresh,
-				Retry:   soa.Retry,
-				Expire:  soa.Expire,
-			}
-		}
-	}
-	return nil
-}
-
-func LookupCAA(ctx context.Context, domain string, timeout time.Duration, resolver string) []CAARecord {
-	c := new(dns.Client)
-	c.Timeout = timeout
-	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn(domain), dns.TypeCAA)
-	m.RecursionDesired = true
-
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	queryCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	r, _, err := c.ExchangeContext(queryCtx, m, normalizeResolver(resolver))
-	if err != nil || r == nil {
-		return nil
-	}
-	var records []CAARecord
-	for _, ans := range r.Answer {
-		if caa, ok := ans.(*dns.CAA); ok {
-			records = append(records, CAARecord{
-				Tag:   caa.Tag,
-				Value: caa.Value,
-			})
-		}
-	}
-	return records
 }
 
 func LookupASN(ctx context.Context, ip string, timeout time.Duration, resolver string) (asn, org string) {
@@ -147,38 +39,69 @@ func LookupASN(ctx context.Context, ip string, timeout time.Duration, resolver s
 	if err != nil {
 		return "", ""
 	}
-	query := reversed + ".origin.asn.cymru.com"
 
-	c := new(dns.Client)
-	c.Timeout = timeout
-	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn(query), dns.TypeTXT)
-	m.RecursionDesired = true
+	values, err := lookupTXTRecord(ctx, reversed+".origin.asn.cymru.com", timeout, resolver)
+	if err != nil {
+		return "", ""
+	}
+	asn, org = parseTeamCymruOriginTXT(values)
+	return asn, org
+}
+
+func lookupTXTRecord(ctx context.Context, query string, timeout time.Duration, resolver string) ([]string, error) {
+	client := new(dns.Client)
+	client.Timeout = timeout
+	message := new(dns.Msg)
+	message.SetQuestion(dns.Fqdn(query), dns.TypeTXT)
+	message.RecursionDesired = true
 
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	queryCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	r, _, err := c.ExchangeContext(queryCtx, m, normalizeResolver(resolver))
-	if err != nil || r == nil {
-		return "", ""
+
+	response, _, err := client.ExchangeContext(queryCtx, message, normalizeResolver(resolver))
+	if err != nil || response == nil {
+		return nil, err
 	}
-	for _, ans := range r.Answer {
-		if txt, ok := ans.(*dns.TXT); ok {
-			for _, s := range txt.Txt {
-				parts := strings.Split(s, " | ")
-				if len(parts) >= 1 {
-					asn = strings.TrimSpace(parts[0])
-				}
-				if len(parts) >= 3 {
-					org = strings.TrimSpace(parts[2])
-				}
-				return asn, org
-			}
+
+	var values []string
+	for _, answer := range response.Answer {
+		txt, ok := answer.(*dns.TXT)
+		if !ok {
+			continue
 		}
+		values = append(values, txt.Txt...)
+	}
+	return values, nil
+}
+
+func parseTeamCymruOriginTXT(values []string) (asn, org string) {
+	for _, value := range values {
+		parts := splitAndTrim(value, "|")
+		if len(parts) == 0 {
+			continue
+		}
+		asn = parts[0]
+		if len(parts) >= 6 {
+			org = parts[5]
+		}
+		return asn, org
 	}
 	return "", ""
+}
+
+func splitAndTrim(value, separator string) []string {
+	raw := strings.Split(value, separator)
+	parts := make([]string, 0, len(raw))
+	for _, item := range raw {
+		trimmed := strings.TrimSpace(item)
+		if trimmed != "" {
+			parts = append(parts, trimmed)
+		}
+	}
+	return parts
 }
 
 func reverseIP(ip string) (string, error) {

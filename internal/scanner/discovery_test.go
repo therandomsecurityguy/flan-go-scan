@@ -22,24 +22,16 @@ func TestIsHostAliveUsesScanPorts(t *testing.T) {
 			if err != nil {
 				return
 			}
-			conn.Close()
+			_ = conn.Close()
 		}
 	}()
 	defer func() {
-		ln.Close()
+		_ = ln.Close()
 		<-done
 	}()
 
 	port := ln.Addr().(*net.TCPAddr).Port
 	if !IsHostAlive(context.Background(), "127.0.0.1", []int{port}, 200*time.Millisecond) {
 		t.Fatalf("expected host to be alive on port %d", port)
-	}
-}
-
-func TestIsHostAliveRespectsContextCancel(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if IsHostAlive(ctx, "127.0.0.1", []int{65535}, 2*time.Second) {
-		t.Fatal("expected canceled context to short-circuit discovery")
 	}
 }

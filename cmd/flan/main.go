@@ -1183,7 +1183,7 @@ func main() {
 					return
 				}
 				progress.PortsScanned.Add(1)
-				res := scanTCPPort(
+				res, completed := scanTCPPort(
 					ctx,
 					target.IP,
 					port,
@@ -1200,12 +1200,14 @@ func main() {
 					target.PTR,
 					target.Kubernetes,
 				)
+				if completed {
+					checkpoint.Save(target.CheckpointKey, port)
+				}
 				if res == nil {
 					return
 				}
 				progress.ServicesFound.Add(1)
 				rawResultsCh <- *res
-				checkpoint.Save(target.CheckpointKey, port)
 			}(target, port, remaining, cdn)
 		}
 	}
@@ -1372,13 +1374,13 @@ func main() {
 			if err := rw.WriteJSON(results); err != nil {
 				slog.Error("failed to write JSON report", "err", err)
 			} else {
-				slog.Info("report written", "format", "json", "directory", cfg.Output.Directory)
+				logReportDestination("json", cfg.Output.Directory)
 			}
 		} else {
 			if err := rw.WriteCSV(results); err != nil {
 				slog.Error("failed to write CSV report", "err", err)
 			} else {
-				slog.Info("report written", "format", "csv", "directory", cfg.Output.Directory)
+				logReportDestination("csv", cfg.Output.Directory)
 			}
 		}
 	default:
@@ -1482,6 +1484,10 @@ func printResult(res scanner.ScanResult) {
 		} else {
 			fmt.Printf("  %s✓  no weak ciphers%s\n", green, reset)
 		}
+	}
+
+	if res.TLS != nil && res.TLS.VerificationError != "" {
+		fmt.Printf("  %s✗  tls verification failed%s  %s\n", yellow, reset, res.TLS.VerificationError)
 	}
 
 	if scanner.IsHTTPService(res.Service, res.Port, res.TLS != nil) {
@@ -1637,12 +1643,7 @@ func selectKubernetesOptions(set map[string]bool, cfg *config.Config, kubeconfig
 		set["kube-inventory"] ||
 		set["kube-inventory-out"] ||
 		set["kube-diff-against"] ||
-		set["kube-delta-only"] ||
-		opts.kubeconfig != "" ||
-		opts.context != "" ||
-		opts.inventoryOut != "" ||
-		opts.diffAgainst != "" ||
-		opts.deltaOnly
+		set["kube-delta-only"]
 	return opts, enabled
 }
 
@@ -2029,9 +2030,13 @@ func scanTCPPort(
 	org string,
 	ptr string,
 	kubernetes []scanner.KubernetesOrigin,
-) *scanner.ScanResult {
-	if !scanner.IsTCPPortOpen(ctx, ip, port, cfg.Scan.Timeout) {
-		return nil
+) (*scanner.ScanResult, bool) {
+	if ctx.Err() != nil {
+		return nil, false
+	}
+	open, definitive := scanner.ProbeTCPPort(ctx, ip, port, cfg.Scan.Timeout)
+	if !open {
+		return nil, definitive
 	}
 
 	fp := scanner.Fingerprint(ip, port, cfg.Scan.Timeout)
@@ -2058,7 +2063,7 @@ func scanTCPPort(
 	if service == "" || service == "unknown" {
 		svc := scanner.DetectServiceContext(ctx, ip, port, cfg.Scan.Timeout)
 		if svc.Name == "closed" {
-			return nil
+			return nil, ctx.Err() == nil
 		}
 		if service == "" || service == "unknown" {
 			service = svc.Name
@@ -2069,6 +2074,9 @@ func scanTCPPort(
 	if service == "" {
 		service = "unknown"
 	}
+	if ctx.Err() != nil {
+		return nil, false
+	}
 
 	likelyTLS := port == 443 || port == 8443 || port == 4443
 	if fp != nil && fp.TLS {
@@ -2078,7 +2086,7 @@ func scanTCPPort(
 	if likelyTLS {
 		tlsResult = scanner.InspectTLS(ctx, ip, hostname, port, cfg.Scan.Timeout, opts.tlsVerify)
 	}
-	hasTLS := tlsResult != nil || likelyTLS
+	hasTLS := tlsResult != nil
 
 	var endpoints []scanner.CrawlResult
 	var appFP *scanner.AppFingerprint
@@ -2105,6 +2113,9 @@ func scanTCPPort(
 	if opts.tlsEnum && hasTLS {
 		tlsEnum = scanner.EnumerateTLS(ctx, ip, hostname, port, cfg.Scan.Timeout, opts.tlsVerify)
 	}
+	if ctx.Err() != nil {
+		return nil, false
+	}
 
 	return &scanner.ScanResult{
 		Host:            ip,
@@ -2126,7 +2137,7 @@ func scanTCPPort(
 		ASN:             asn,
 		Org:             org,
 		Kubernetes:      append([]scanner.KubernetesOrigin(nil), kubernetes...),
-	}
+	}, true
 }
 
 func displayHost(ip, hostname string) string {
@@ -2192,6 +2203,14 @@ func kubernetesOriginKey(origin scanner.KubernetesOrigin) string {
 		origin.Name,
 		origin.Exposure,
 	}, "|")
+}
+
+func logReportDestination(format, outputDir string) {
+	if outputDir == "" || outputDir == "-" {
+		slog.Info("report written", "format", format, "destination", "stdout")
+		return
+	}
+	slog.Info("report written", "format", format, "directory", outputDir)
 }
 
 func headerInspectionEligible(res scanner.ScanResult) (bool, int) {

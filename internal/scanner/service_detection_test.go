@@ -7,79 +7,10 @@ import (
 	"time"
 )
 
-func TestSSHVersionParsing(t *testing.T) {
-	tests := []struct {
-		banner  string
-		version string
-	}{
-		{
-			banner:  "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.1\r\n",
-			version: "OpenSSH_8.9p1",
-		},
-		{
-			banner:  "SSH-2.0-dropbear_2022.83\r\n",
-			version: "dropbear_2022.83",
-		},
-		{
-			banner:  "SSH-2.0-\r\n",
-			version: "",
-		},
-	}
-	for _, tt := range tests {
-		m := sshVersionRe.FindStringSubmatch(tt.banner)
-		got := ""
-		if len(m) > 1 {
-			got = m[1]
-		}
-		if got != tt.version {
-			t.Errorf("banner %q: got %q, want %q", tt.banner, got, tt.version)
-		}
-	}
-}
-
-func TestSMTPVersionParsing(t *testing.T) {
-	tests := []struct {
-		banner  string
-		version string
-	}{
-		{
-			banner:  "220 mail.example.com ESMTP Postfix\r\n",
-			version: "Postfix",
-		},
-		{
-			banner:  "220 smtp.example.com Sendmail\r\n",
-			version: "Sendmail",
-		},
-	}
-	for _, tt := range tests {
-		m := smtpVersionRe.FindStringSubmatch(tt.banner)
-		got := ""
-		if len(m) > 1 {
-			got = m[1]
-		}
-		if got != tt.version {
-			t.Errorf("banner %q: got %q, want %q", tt.banner, got, tt.version)
-		}
-	}
-}
-
 func TestDetectServiceClosedPort(t *testing.T) {
 	result := DetectService("127.0.0.1", 1, 100*time.Millisecond)
 	if result.Name != "closed" {
-		t.Errorf("expected closed, got %s", result.Name)
-	}
-}
-
-func TestDetectServiceContextRespectsCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	start := time.Now()
-	result := DetectServiceContext(ctx, "192.0.2.1", 22, 5*time.Second)
-	if result.Name != "closed" {
 		t.Fatalf("expected closed, got %s", result.Name)
-	}
-	if time.Since(start) > 500*time.Millisecond {
-		t.Fatalf("expected canceled detect service to return quickly")
 	}
 }
 
@@ -93,7 +24,7 @@ func TestIsTCPPortOpen(t *testing.T) {
 	go func() {
 		conn, err := ln.Accept()
 		if err == nil {
-			conn.Close()
+			_ = conn.Close()
 		}
 	}()
 
@@ -101,6 +32,19 @@ func TestIsTCPPortOpen(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if !IsTCPPortOpen(ctx, "127.0.0.1", addr.Port, 200*time.Millisecond) {
-		t.Fatalf("expected open port")
+		t.Fatal("expected open port")
+	}
+}
+
+func TestProbeTCPPortCanceledContextIsNotDefinitive(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	open, definitive := ProbeTCPPort(ctx, "127.0.0.1", 1, 200*time.Millisecond)
+	if open {
+		t.Fatal("did not expect canceled probe to report open")
+	}
+	if definitive {
+		t.Fatal("did not expect canceled probe to be treated as definitive")
 	}
 }

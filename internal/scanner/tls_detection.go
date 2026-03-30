@@ -5,39 +5,58 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 )
 
 type TLSResult struct {
-	Enabled     bool      `json:"enabled"`
-	Version     string    `json:"version,omitempty"`
-	CipherSuite string    `json:"cipher_suite,omitempty"`
-	Subject     string    `json:"subject,omitempty"`
-	Issuer      string    `json:"issuer,omitempty"`
-	NotBefore   time.Time `json:"not_before,omitempty"`
-	NotAfter    time.Time `json:"not_after,omitempty"`
-	SANs        []string  `json:"sans,omitempty"`
-	Expired     bool      `json:"expired,omitempty"`
-	SelfSigned  bool      `json:"self_signed,omitempty"`
+	Enabled           bool      `json:"enabled"`
+	Version           string    `json:"version,omitempty"`
+	CipherSuite       string    `json:"cipher_suite,omitempty"`
+	Subject           string    `json:"subject,omitempty"`
+	Issuer            string    `json:"issuer,omitempty"`
+	NotBefore         time.Time `json:"not_before,omitempty"`
+	NotAfter          time.Time `json:"not_after,omitempty"`
+	SANs              []string  `json:"sans,omitempty"`
+	Expired           bool      `json:"expired,omitempty"`
+	SelfSigned        bool      `json:"self_signed,omitempty"`
+	VerificationError string    `json:"verification_error,omitempty"`
 }
 
 func InspectTLS(ctx context.Context, host, hostname string, port int, timeout time.Duration, verify bool) *TLSResult {
+	serverName := tlsServerName(host, hostname)
+	result, err := inspectTLS(ctx, host, port, timeout, serverName, verify)
+	if err == nil {
+		return result
+	}
+	if !verify {
+		return nil
+	}
+	result, insecureErr := inspectTLS(ctx, host, port, timeout, serverName, false)
+	if insecureErr != nil {
+		return nil
+	}
+	result.VerificationError = err.Error()
+	return result
+}
+
+func inspectTLS(ctx context.Context, host string, port int, timeout time.Duration, serverName string, verify bool) (*TLSResult, error) {
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	d := net.Dialer{Timeout: timeout}
 	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer conn.Close()
 
 	tlsCfg := &tls.Config{InsecureSkipVerify: !verify}
-	if hostname != "" && net.ParseIP(hostname) == nil {
-		tlsCfg.ServerName = hostname
+	if serverName != "" {
+		tlsCfg.ServerName = serverName
 	}
 	tlsConn := tls.Client(conn, tlsCfg)
 	tlsConn.SetDeadline(time.Now().Add(timeout))
 	if err := tlsConn.Handshake(); err != nil {
-		return nil
+		return nil, err
 	}
 
 	state := tlsConn.ConnectionState()
@@ -58,7 +77,14 @@ func InspectTLS(ctx context.Context, host, hostname string, port int, timeout ti
 		result.SelfSigned = cert.Issuer.String() == cert.Subject.String()
 	}
 
-	return result
+	return result, nil
+}
+
+func tlsServerName(host, hostname string) string {
+	if value := strings.TrimSpace(hostname); value != "" {
+		return strings.TrimSuffix(value, ".")
+	}
+	return strings.TrimSpace(host)
 }
 
 func tlsVersionString(v uint16) string {

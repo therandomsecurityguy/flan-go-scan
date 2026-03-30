@@ -263,7 +263,7 @@ func normalizeAsset(zone Zone, record DNSRecord, include, exclude []string) (Ass
 
 	value := strings.TrimSpace(record.Content)
 	if recordType == "A" || recordType == "AAAA" {
-		if !isPublicIP(value) {
+		if !record.Proxied && !isPublicIP(value) {
 			return Asset{}, false
 		}
 	}
