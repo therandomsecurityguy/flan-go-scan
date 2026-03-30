@@ -164,6 +164,24 @@ func TestNormalizeDiscoveredHosts(t *testing.T) {
 	}
 }
 
+func TestMergeKubernetesOrigins(t *testing.T) {
+	got := mergeKubernetesOrigins(
+		[]scanner.KubernetesOrigin{{Cluster: "prod", Namespace: "app", Kind: "Ingress", Name: "web", Exposure: "ingress"}},
+		[]scanner.KubernetesOrigin{
+			{Cluster: "prod", Namespace: "app", Kind: "Ingress", Name: "web", Exposure: "ingress"},
+			{Cluster: "prod", Namespace: "app", Kind: "Service", Name: "web", Exposure: "loadbalancer"},
+		},
+	)
+
+	want := []scanner.KubernetesOrigin{
+		{Cluster: "prod", Namespace: "app", Kind: "Ingress", Name: "web", Exposure: "ingress"},
+		{Cluster: "prod", Namespace: "app", Kind: "Service", Name: "web", Exposure: "loadbalancer"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected kubernetes origin merge: got %#v want %#v", got, want)
+	}
+}
+
 func TestSelectScanPortsDomainProfileDefault(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Scan.Ports = "22,80"

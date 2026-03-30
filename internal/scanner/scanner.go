@@ -7,6 +7,15 @@ type ProductFingerprint struct {
 	Confidence string `json:"confidence"`
 }
 
+type KubernetesOrigin struct {
+	Cluster   string `json:"cluster,omitempty"`
+	Context   string `json:"context,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+	Kind      string `json:"kind,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Exposure  string `json:"exposure,omitempty"`
+}
+
 type ScanResult struct {
 	Host            string               `json:"host"`
 	Port            int                  `json:"port"`
@@ -27,4 +36,5 @@ type ScanResult struct {
 	PTR             string               `json:"ptr,omitempty"`
 	ASN             string               `json:"asn,omitempty"`
 	Org             string               `json:"org,omitempty"`
+	Kubernetes      []KubernetesOrigin   `json:"kubernetes,omitempty"`
 }

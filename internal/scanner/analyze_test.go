@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/togethercomputer/together-go"
@@ -75,5 +76,25 @@ func TestChoiceContentUsesFinalAnswerFallback(t *testing.T) {
 
 	if got := choiceContent(choice); got != "- HIGH: fix this" {
 		t.Fatalf("unexpected content: %q", got)
+	}
+}
+
+func TestBuildSummaryIncludesKubernetesOrigins(t *testing.T) {
+	summary := buildSummary([]ScanResult{{
+		Host:     "69.2.199.151",
+		Hostname: "dapperdingo-hn1.cloud.together.ai",
+		Port:     6443,
+		Service:  "https",
+		Kubernetes: []KubernetesOrigin{{
+			Cluster:  "dapperdingo",
+			Context:  "dapperdingo",
+			Kind:     "APIServer",
+			Name:     "kubernetes",
+			Exposure: "cluster",
+		}},
+	}})
+
+	if !strings.Contains(summary, "Kubernetes: APIServer kubernetes cluster=dapperdingo exposure=cluster") {
+		t.Fatalf("expected kubernetes origin in summary, got %q", summary)
 	}
 }

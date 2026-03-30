@@ -354,7 +354,7 @@ Common options: AWS_PROFILE=<profile>, aws sso login, or environment credentials
 
 ### Kubernetes Access
 
-Kubernetes kubeconfig support is explicit. Flan can validate cluster access via the API server `/version` endpoint, or enumerate externally relevant resources from authenticated cluster access when `--kube-inventory` is enabled. The current inventory phase focuses on API server metadata, `Ingress` resources, `LoadBalancer` services, and externally reachable `NodePort` services.
+Kubernetes kubeconfig support is explicit. Flan can validate cluster access via the API server `/version` endpoint, or enumerate externally relevant resources from authenticated cluster access when `--kube-inventory` is enabled. The current inventory phase focuses on API server metadata, `Ingress` resources, `LoadBalancer` services, and externally reachable `NodePort` services. Kubernetes-derived scan results carry cluster, namespace, resource kind, and exposure metadata into output and AI summaries.
 
 ```yaml
 kubernetes:

@@ -523,7 +523,18 @@ func main() {
 				slog.Info("kubernetes inventory written", "path", path)
 			}
 			for _, item := range selectedItems {
-				endpointTargets = append(endpointTargets, scanner.EndpointTarget{Host: item.Host, Port: item.Port})
+				endpointTargets = append(endpointTargets, scanner.EndpointTarget{
+					Host: item.Host,
+					Port: item.Port,
+					Kubernetes: []scanner.KubernetesOrigin{{
+						Cluster:   item.Cluster,
+						Context:   item.Context,
+						Namespace: item.Namespace,
+						Kind:      item.Kind,
+						Name:      item.Name,
+						Exposure:  item.Exposure,
+					}},
+				})
 			}
 			slog.Info("kubernetes inventory complete", "resources", len(items), "scan_targets", len(endpointTargets))
 			if len(selectedItems) == 0 && tgt == "" && dom == "" && !cloudflareEnabled && !awsEnabled && !set["list"] && !set["l"] {
@@ -938,7 +949,12 @@ func main() {
 		resolveInputs = append(resolveInputs, resolveInput{Host: host})
 	}
 	for _, endpoint := range endpointTargets {
-		resolveInputs = append(resolveInputs, resolveInput{Host: endpoint.Host, Port: endpoint.Port, ExactPort: true})
+		resolveInputs = append(resolveInputs, resolveInput{
+			Host:       endpoint.Host,
+			Port:       endpoint.Port,
+			ExactPort:  true,
+			Kubernetes: append([]scanner.KubernetesOrigin(nil), endpoint.Kubernetes...),
+		})
 	}
 	targets := resolveTargets(ctx, resolveInputs, dnsCache, *asnFlag, cfg.Scan.Timeout, res, cfg.Scan.Workers)
 	guardPorts := len(ports)
@@ -1182,6 +1198,7 @@ func main() {
 					target.ASN,
 					target.Org,
 					target.PTR,
+					target.Kubernetes,
 				)
 				if res == nil {
 					return
@@ -1203,6 +1220,10 @@ func main() {
 		}
 		var udpWg sync.WaitGroup
 		seenUDPHosts := make(map[string]struct{})
+		udpKubernetesByIP := make(map[string][]scanner.KubernetesOrigin)
+		for _, target := range targets {
+			udpKubernetesByIP[target.IP] = mergeKubernetesOrigins(udpKubernetesByIP[target.IP], target.Kubernetes)
+		}
 		for _, target := range targets {
 			ip := target.IP
 			if _, exists := seenUDPHosts[ip]; exists {
@@ -1238,12 +1259,13 @@ func main() {
 					}
 					progress.ServicesFound.Add(1)
 					rawResultsCh <- scanner.ScanResult{
-						Host:     ip,
-						Port:     port,
-						Protocol: "udp",
-						Service:  fp.Service,
-						Version:  fp.Version,
-						Metadata: fp.Metadata,
+						Host:       ip,
+						Port:       port,
+						Protocol:   "udp",
+						Service:    fp.Service,
+						Version:    fp.Version,
+						Metadata:   fp.Metadata,
+						Kubernetes: append([]scanner.KubernetesOrigin(nil), udpKubernetesByIP[ip]...),
 					}
 				}(ip, port)
 			}
@@ -1409,6 +1431,14 @@ func printResult(res scanner.ScanResult) {
 			meta = append(meta, label)
 		}
 		fmt.Printf("  %smeta%s  %s\n", cyan, reset, strings.Join(meta, "  ·  "))
+	}
+
+	if len(res.Kubernetes) > 0 {
+		values := make([]string, 0, len(res.Kubernetes))
+		for _, origin := range res.Kubernetes {
+			values = append(values, formatKubernetesOrigin(origin))
+		}
+		fmt.Printf("  %skube%s  %s\n", cyan, reset, strings.Join(values, "  ·  "))
 	}
 
 	if len(res.Products) > 0 || res.App != nil {
@@ -1700,12 +1730,14 @@ type scanTarget struct {
 	Org           string
 	PTR           string
 	CheckpointKey string
+	Kubernetes    []scanner.KubernetesOrigin
 }
 
 type resolveInput struct {
-	Host      string
-	Port      int
-	ExactPort bool
+	Host       string
+	Port       int
+	ExactPort  bool
+	Kubernetes []scanner.KubernetesOrigin
 }
 
 func resolveTargets(
@@ -1792,6 +1824,7 @@ func resolveTargets(
 						Port:          input.Port,
 						ExactPort:     input.ExactPort,
 						CheckpointKey: targetCheckpointKey(hostname, ipStr),
+						Kubernetes:    append([]scanner.KubernetesOrigin(nil), input.Kubernetes...),
 					}
 					if asnEnabled {
 						meta := getIPMetadata(ipStr)
@@ -1824,17 +1857,18 @@ sendLoop:
 		close(targetCh)
 	}()
 
-	seen := make(map[string]struct{})
+	indexByKey := make(map[string]int)
 	targets := make([]scanTarget, 0, len(inputs))
 	for target := range targetCh {
 		key := target.CheckpointKey
 		if target.ExactPort && target.Port > 0 {
 			key = fmt.Sprintf("%s:%d", key, target.Port)
 		}
-		if _, exists := seen[key]; exists {
+		if idx, exists := indexByKey[key]; exists {
+			targets[idx].Kubernetes = mergeKubernetesOrigins(targets[idx].Kubernetes, target.Kubernetes)
 			continue
 		}
-		seen[key] = struct{}{}
+		indexByKey[key] = len(targets)
 		targets = append(targets, target)
 	}
 	sort.Slice(targets, func(i, j int) bool {
@@ -1994,6 +2028,7 @@ func scanTCPPort(
 	asn string,
 	org string,
 	ptr string,
+	kubernetes []scanner.KubernetesOrigin,
 ) *scanner.ScanResult {
 	if !scanner.IsTCPPortOpen(ctx, ip, port, cfg.Scan.Timeout) {
 		return nil
@@ -2090,6 +2125,7 @@ func scanTCPPort(
 		PTR:             ptr,
 		ASN:             asn,
 		Org:             org,
+		Kubernetes:      append([]scanner.KubernetesOrigin(nil), kubernetes...),
 	}
 }
 
@@ -2098,6 +2134,64 @@ func displayHost(ip, hostname string) string {
 		return ip
 	}
 	return hostname + " (" + ip + ")"
+}
+
+func formatKubernetesOrigin(origin scanner.KubernetesOrigin) string {
+	parts := make([]string, 0, 4)
+	if origin.Kind != "" {
+		parts = append(parts, origin.Kind)
+	}
+	if origin.Namespace != "" && origin.Name != "" {
+		parts = append(parts, origin.Namespace+"/"+origin.Name)
+	} else if origin.Name != "" {
+		parts = append(parts, origin.Name)
+	}
+	if origin.Cluster != "" {
+		parts = append(parts, "cluster="+origin.Cluster)
+	}
+	if origin.Exposure != "" {
+		parts = append(parts, "exposure="+origin.Exposure)
+	}
+	return strings.Join(parts, " ")
+}
+
+func mergeKubernetesOrigins(base, extra []scanner.KubernetesOrigin) []scanner.KubernetesOrigin {
+	if len(extra) == 0 {
+		return base
+	}
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	out := make([]scanner.KubernetesOrigin, 0, len(base)+len(extra))
+	for _, origin := range base {
+		key := kubernetesOriginKey(origin)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, origin)
+	}
+	for _, origin := range extra {
+		key := kubernetesOriginKey(origin)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, origin)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return kubernetesOriginKey(out[i]) < kubernetesOriginKey(out[j])
+	})
+	return out
+}
+
+func kubernetesOriginKey(origin scanner.KubernetesOrigin) string {
+	return strings.Join([]string{
+		origin.Cluster,
+		origin.Context,
+		origin.Namespace,
+		origin.Kind,
+		origin.Name,
+		origin.Exposure,
+	}, "|")
 }
 
 func headerInspectionEligible(res scanner.ScanResult) (bool, int) {
