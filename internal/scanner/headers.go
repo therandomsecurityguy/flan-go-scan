@@ -38,8 +38,8 @@ func InspectHeaders(ctx context.Context, scheme, ip, hostname string, port int, 
 	}
 
 	tlsCfg := &tls.Config{InsecureSkipVerify: !verifyTLS}
-	if hostname != "" && net.ParseIP(hostname) == nil {
-		tlsCfg.ServerName = hostname
+	if serverName := tlsServerName(ip, hostname); serverName != "" {
+		tlsCfg.ServerName = serverName
 	}
 
 	client := &http.Client{

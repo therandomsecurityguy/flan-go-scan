@@ -3,10 +3,12 @@ package scanner
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -17,18 +19,22 @@ type ServiceResult struct {
 }
 
 func IsTCPPortOpen(ctx context.Context, host string, port int, timeout time.Duration) bool {
+	open, _ := ProbeTCPPort(ctx, host, port, timeout)
+	return open
+}
+
+func ProbeTCPPort(ctx context.Context, host string, port int, timeout time.Duration) (bool, bool) {
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	probeTimeout := timeout
 	if probeTimeout <= 0 || probeTimeout > time.Second {
 		probeTimeout = time.Second
 	}
-	dialer := net.Dialer{Timeout: probeTimeout}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return false
+	conn, outcome := dialTCPPort(ctx, addr, probeTimeout)
+	if conn != nil {
+		_ = conn.Close()
+		return true, true
 	}
-	conn.Close()
-	return true
+	return false, outcome == tcpDialClosed
 }
 
 func DetectService(host string, port int, timeout time.Duration) ServiceResult {
@@ -37,10 +43,12 @@ func DetectService(host string, port int, timeout time.Duration) ServiceResult {
 
 func DetectServiceContext(ctx context.Context, host string, port int, timeout time.Duration) ServiceResult {
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	dialer := net.Dialer{Timeout: timeout}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return ServiceResult{Name: "closed"}
+	conn, outcome := dialTCPPort(ctx, addr, timeout)
+	if conn == nil {
+		if outcome == tcpDialClosed {
+			return ServiceResult{Name: "closed"}
+		}
+		return ServiceResult{Name: "unknown"}
 	}
 	defer conn.Close()
 
@@ -72,6 +80,44 @@ func DetectServiceContext(ctx context.Context, host string, port int, timeout ti
 	default:
 		return detectByBanner(conn, timeout)
 	}
+}
+
+type tcpDialOutcome uint8
+
+const (
+	tcpDialUnknown tcpDialOutcome = iota
+	tcpDialClosed
+	tcpDialOpen
+)
+
+func dialTCPPort(ctx context.Context, addr string, timeout time.Duration) (net.Conn, tcpDialOutcome) {
+	dialer := net.Dialer{Timeout: timeout}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, classifyTCPDialError(err)
+	}
+	return conn, tcpDialOpen
+}
+
+func classifyTCPDialError(err error) tcpDialOutcome {
+	if err == nil {
+		return tcpDialOpen
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return tcpDialUnknown
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary()) {
+		return tcpDialUnknown
+	}
+	var errno syscall.Errno
+	if errors.As(err, &errno) && errno == syscall.ECONNREFUSED {
+		return tcpDialClosed
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "connection refused") {
+		return tcpDialClosed
+	}
+	return tcpDialUnknown
 }
 
 func readBanner(conn net.Conn, timeout time.Duration) string {

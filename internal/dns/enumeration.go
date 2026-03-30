@@ -56,6 +56,10 @@ func NewEnumerator(timeout time.Duration, workers int) *Enumerator {
 }
 
 func NewEnumeratorWithResolver(timeout time.Duration, workers int, resolverAddr string) *Enumerator {
+	resolverAddr = normalizeResolverAddr(resolverAddr)
+	if resolverAddr == "" || resolverAddr == "system" {
+		return NewEnumerator(timeout, workers)
+	}
 	return &Enumerator{
 		timeout: timeout,
 		workers: workers,
@@ -205,18 +209,6 @@ func randomString(n int) string {
 	return string(b)
 }
 
-func ResolveHostname(host string) ([]net.IP, error) {
-	ips, err := net.LookupIP(host)
-	if err != nil {
-		return nil, err
-	}
-	return ips, nil
-}
-
-func GetARecords(domain string) ([]net.IP, error) {
-	return ResolveHostname(domain)
-}
-
 const dnsTimeout = 10 * time.Second
 
 func GetNSRecords(domain string) ([]string, error) {
@@ -258,15 +250,4 @@ func GetTXTRecords(domain string) ([]string, error) {
 		return nil, err
 	}
 	return txtRecords, nil
-}
-
-func GetCNAMERecords(alias string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), dnsTimeout)
-	defer cancel()
-	resolver := &net.Resolver{PreferGo: true}
-	cname, err := resolver.LookupCNAME(ctx, alias)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSuffix(cname, "."), nil
 }
