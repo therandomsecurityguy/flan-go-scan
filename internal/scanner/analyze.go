@@ -318,6 +318,13 @@ func buildSummary(results []ScanResult) string {
 		if r.ASN != "" {
 			fmt.Fprintf(&b, "  ASN: AS%s %s\n", r.ASN, r.Org)
 		}
+		if len(r.Kubernetes) > 0 {
+			values := make([]string, 0, len(r.Kubernetes))
+			for _, origin := range r.Kubernetes {
+				values = append(values, formatKubernetesOrigin(origin))
+			}
+			fmt.Fprintf(&b, "  Kubernetes: %s\n", strings.Join(values, ", "))
+		}
 
 		if r.TLSEnum != nil {
 			fmt.Fprintf(&b, "  TLS versions supported: %s\n", strings.Join(r.TLSEnum.SupportedVersions, ", "))
@@ -394,4 +401,23 @@ func buildSummary(results []ScanResult) string {
 	}
 
 	return b.String()
+}
+
+func formatKubernetesOrigin(origin KubernetesOrigin) string {
+	parts := make([]string, 0, 4)
+	if origin.Kind != "" {
+		parts = append(parts, origin.Kind)
+	}
+	if origin.Namespace != "" && origin.Name != "" {
+		parts = append(parts, origin.Namespace+"/"+origin.Name)
+	} else if origin.Name != "" {
+		parts = append(parts, origin.Name)
+	}
+	if origin.Cluster != "" {
+		parts = append(parts, "cluster="+origin.Cluster)
+	}
+	if origin.Exposure != "" {
+		parts = append(parts, "exposure="+origin.Exposure)
+	}
+	return strings.Join(parts, " ")
 }

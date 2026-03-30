@@ -13,8 +13,9 @@ import (
 const maxTargetScannerTokenSize = 1024 * 1024
 
 type EndpointTarget struct {
-	Host string
-	Port int
+	Host       string
+	Port       int
+	Kubernetes []KubernetesOrigin
 }
 
 func ParseTargets(r io.Reader) ([]string, error) {
