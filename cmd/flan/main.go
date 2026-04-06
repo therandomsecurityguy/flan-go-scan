@@ -62,6 +62,7 @@ func printBanner() {
 func usage() {
 	fmt.Fprintln(os.Stderr, "Usage:")
 	fmt.Fprintln(os.Stderr, "  flan [flags]")
+	fmt.Fprintln(os.Stderr, "  flan verify [flags]")
 	fmt.Fprintln(os.Stderr)
 
 	printUsageSection("GENERAL", [][2]string{
@@ -136,6 +137,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "EXAMPLES:")
 	examples := []string{
 		"flan -t scanme.nmap.org",
+		"flan verify --input reports/scan-20260406-120000.json",
 		"flan -l targets.txt --top-ports 1000",
 		"flan -d example.net",
 		"flan --cloudflare --cloudflare-zones example.net --cloudflare-include api.example.net",
@@ -269,6 +271,15 @@ func readHosts(filename string) ([]string, error) {
 }
 
 func main() {
+	handled, err := dispatchSubcommand(os.Args[1:], os.Stdout, os.Stderr)
+	if handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	flag.Usage = usage
 
 	configPath := flag.String("config", "config/config.yaml", "")
