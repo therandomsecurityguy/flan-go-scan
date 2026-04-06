@@ -99,15 +99,81 @@ func TestSelectorContextFromScanResultBuildsHints(t *testing.T) {
 
 	ctx := SelectorContextFromScanResult(result)
 
-	if got, want := len(ctx.Surfaces), 2; got != want {
+	if got, want := len(ctx.Surfaces), 3; got != want {
 		t.Fatalf("len(ctx.Surfaces) = %d, want %d", got, want)
 	}
 	assertStrings(t, "ProductHints", ctx.ProductHints, []string{"grafana"})
 	assertStrings(t, "AppHints", ctx.AppHints, []string{"grafana", "nginx/1.27.0"})
-	assertStrings(t, "PathHints", ctx.PathHints, []string{"/api/health", "/login?redirect=/"})
+	assertStrings(t, "AuthHints", ctx.AuthHints, []string{"login"})
+	assertStrings(t, "PathHints", ctx.PathHints, []string{"/", "/api/health", "/login?redirect=/"})
 	assertStrings(t, "TitleHints", ctx.TitleHints, []string{"health", "login"})
 	assertStrings(t, "HeaderHints", ctx.HeaderHints, []string{"content-security-policy", "server"})
 	assertStrings(t, "Vulnerabilities", ctx.Vulnerabilities, []string{"CVE-2025-1234", "CWE-601"})
+}
+
+func TestSurfacesFromScanResultAddsFallbackRootForHTTPService(t *testing.T) {
+	result := scanner.ScanResult{
+		Host:     "192.0.2.20",
+		Port:     443,
+		Protocol: "tcp",
+		Service:  "https",
+		TLS:      &scanner.TLSResult{Version: "TLS 1.3"},
+	}
+
+	surfaces := SurfacesFromScanResult(result)
+
+	if got, want := len(surfaces), 1; got != want {
+		t.Fatalf("len(surfaces) = %d, want %d", got, want)
+	}
+	if got, want := surfaces[0].Source, "service"; got != want {
+		t.Fatalf("surfaces[0].Source = %q, want %q", got, want)
+	}
+	if got, want := surfaces[0].Path, "/"; got != want {
+		t.Fatalf("surfaces[0].Path = %q, want %q", got, want)
+	}
+}
+
+func TestSurfacesFromScanResultAddsInferredProductPaths(t *testing.T) {
+	result := scanner.ScanResult{
+		Host:     "192.0.2.21",
+		Port:     8200,
+		Protocol: "tcp",
+		Service:  "http",
+		Products: []scanner.ProductFingerprint{
+			{Name: "HashiCorp Vault", Confidence: "high"},
+		},
+	}
+
+	surfaces := SurfacesFromScanResult(result)
+
+	assertSurfacePaths(t, surfaces, []string{"/", "/v1/sys/health"})
+}
+
+func TestSurfacesFromScanResultAddsKubernetesPaths(t *testing.T) {
+	result := scanner.ScanResult{
+		Host:     "192.0.2.22",
+		Port:     6443,
+		Protocol: "tcp",
+		Service:  "https",
+		TLS:      &scanner.TLSResult{Version: "TLS 1.3"},
+		Kubernetes: []scanner.KubernetesOrigin{{
+			Cluster: "prod",
+		}},
+	}
+
+	surfaces := SurfacesFromScanResult(result)
+
+	assertSurfacePaths(t, surfaces, []string{"/", "/api", "/apis", "/version"})
+}
+
+func TestHeaderHintsSkipsMissingHeaders(t *testing.T) {
+	hints := headerHints([]scanner.HeaderFinding{
+		{Header: "Content-Security-Policy", Detail: "missing CSP; XSS and injection attacks not mitigated"},
+		{Header: "Server", Detail: "version disclosed: nginx/1.27.0"},
+		{Header: "HTTP Probe", Detail: "header inspection failed"},
+	})
+
+	assertStrings(t, "HeaderHints", hints, []string{"server"})
 }
 
 func assertStrings(t *testing.T, name string, got, want []string) {
@@ -120,4 +186,13 @@ func assertStrings(t *testing.T, name string, got, want []string) {
 			t.Fatalf("%s[%d] = %q, want %q", name, i, got[i], want[i])
 		}
 	}
+}
+
+func assertSurfacePaths(t *testing.T, surfaces []Surface, want []string) {
+	t.Helper()
+	got := make([]string, 0, len(surfaces))
+	for _, surface := range surfaces {
+		got = append(got, surface.Path)
+	}
+	assertStrings(t, "SurfacePaths", got, want)
 }

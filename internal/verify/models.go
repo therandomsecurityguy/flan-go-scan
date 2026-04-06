@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/therandomsecurityguy/flan-go-scan/internal/scanner"
@@ -34,6 +33,7 @@ type Surface struct {
 	Path        string   `json:"path"`
 	MethodHints []string `json:"method_hints,omitempty"`
 	Params      []string `json:"params,omitempty"`
+	AuthHints   []string `json:"auth_hints,omitempty"`
 	StatusCode  int      `json:"status_code,omitempty"`
 	ContentType string   `json:"content_type,omitempty"`
 	Title       string   `json:"title,omitempty"`
@@ -46,6 +46,7 @@ type SelectorContext struct {
 	ProductHints    []string                `json:"product_hints,omitempty"`
 	AppHints        []string                `json:"app_hints,omitempty"`
 	PathHints       []string                `json:"path_hints,omitempty"`
+	AuthHints       []string                `json:"auth_hints,omitempty"`
 	TitleHints      []string                `json:"title_hints,omitempty"`
 	HeaderHints     []string                `json:"header_hints,omitempty"`
 	Vulnerabilities []string                `json:"vulnerabilities,omitempty"`
@@ -119,35 +120,32 @@ func AssetFromScanResult(result scanner.ScanResult) Asset {
 }
 
 func SurfacesFromScanResult(result scanner.ScanResult) []Surface {
-	if len(result.Endpoints) == 0 {
-		return nil
-	}
-
-	seen := make(map[string]struct{}, len(result.Endpoints))
-	surfaces := make([]Surface, 0, len(result.Endpoints))
-	for _, endpoint := range result.Endpoints {
-		surface := SurfaceFromCrawlResult(endpoint)
-		key := strings.Join([]string{
-			surface.Source,
-			surface.Path,
-			strings.Join(surface.Params, ","),
-			strconv.Itoa(surface.StatusCode),
-			surface.ContentType,
-			surface.Title,
-			surface.RedirectTo,
-		}, "\x00")
+	seen := make(map[string]struct{}, len(result.Endpoints)+4)
+	surfaces := make([]Surface, 0, len(result.Endpoints)+4)
+	addSurface := func(surface Surface) {
+		key := surfaceKey(surface)
 		if _, ok := seen[key]; ok {
-			continue
+			return
 		}
 		seen[key] = struct{}{}
 		surfaces = append(surfaces, surface)
 	}
 
+	for _, endpoint := range result.Endpoints {
+		addSurface(SurfaceFromCrawlResult(endpoint))
+	}
+	for _, surface := range inferredSurfacesFromScanResult(result, surfaces) {
+		addSurface(surface)
+	}
+
+	if len(surfaces) == 0 {
+		return nil
+	}
 	return surfaces
 }
 
 func SurfaceFromCrawlResult(result scanner.CrawlResult) Surface {
-	return Surface{
+	surface := Surface{
 		Source:      "crawl",
 		Path:        normalizeSurfacePath(result.Path),
 		MethodHints: []string{"GET"},
@@ -157,6 +155,8 @@ func SurfaceFromCrawlResult(result scanner.CrawlResult) Surface {
 		Title:       strings.TrimSpace(result.Title),
 		RedirectTo:  strings.TrimSpace(result.RedirectTo),
 	}
+	surface.AuthHints = authHintsForSurface(surface)
+	return surface
 }
 
 func SelectorContextFromScanResult(result scanner.ScanResult) SelectorContext {
@@ -169,6 +169,7 @@ func SelectorContextFromScanResult(result scanner.ScanResult) SelectorContext {
 		ProductHints:    productHints(asset.Products),
 		AppHints:        appHints(result.App),
 		PathHints:       surfacePaths(surfaces),
+		AuthHints:       surfaceAuthHints(surfaces),
 		TitleHints:      surfaceTitles(surfaces),
 		HeaderHints:     headerHints(result.SecurityHeaders),
 		Vulnerabilities: dedupeStrings(result.Vulnerabilities),
@@ -284,11 +285,23 @@ func surfaceTitles(surfaces []Surface) []string {
 func headerHints(findings []scanner.HeaderFinding) []string {
 	hints := make([]string, 0, len(findings))
 	for _, finding := range findings {
+		detail := strings.ToLower(strings.TrimSpace(finding.Detail))
+		if strings.HasPrefix(detail, "missing ") {
+			continue
+		}
 		header := strings.ToLower(strings.TrimSpace(finding.Header))
-		if header == "" {
+		if header == "" || header == "http probe" {
 			continue
 		}
 		hints = append(hints, header)
+	}
+	return dedupeStrings(hints)
+}
+
+func surfaceAuthHints(surfaces []Surface) []string {
+	hints := make([]string, 0, len(surfaces))
+	for _, surface := range surfaces {
+		hints = append(hints, surface.AuthHints...)
 	}
 	return dedupeStrings(hints)
 }
