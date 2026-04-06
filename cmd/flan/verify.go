@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/therandomsecurityguy/flan-go-scan/internal/output"
@@ -16,10 +17,22 @@ import (
 var stdinHasDataFunc = stdinHasData
 
 type verifySummary struct {
-	InputPath string `json:"input_path"`
-	Results   int    `json:"results"`
-	Assets    int    `json:"assets"`
-	Surfaces  int    `json:"surfaces"`
+	InputPath        string                   `json:"input_path"`
+	Results          int                      `json:"results"`
+	Assets           int                      `json:"assets"`
+	Surfaces         int                      `json:"surfaces"`
+	Candidates       int                      `json:"candidates"`
+	CandidateDetails []verifyCandidateSummary `json:"candidate_details,omitempty"`
+}
+
+type verifyCandidateSummary struct {
+	CheckID string   `json:"check_id"`
+	Family  string   `json:"family"`
+	Adapter string   `json:"adapter,omitempty"`
+	Host    string   `json:"host"`
+	Port    int      `json:"port"`
+	Path    string   `json:"path,omitempty"`
+	Reasons []string `json:"reasons,omitempty"`
 }
 
 func dispatchSubcommand(args []string, stdout, stderr io.Writer) (bool, error) {
@@ -88,6 +101,22 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 	for _, result := range results {
 		ctx := verifymodel.SelectorContextFromScanResult(result)
 		summary.Surfaces += len(ctx.Surfaces)
+		candidates := verifymodel.SelectCandidateChecks(ctx)
+		summary.Candidates += len(candidates)
+		for _, candidate := range candidates {
+			detail := verifyCandidateSummary{
+				CheckID: candidate.CheckID,
+				Family:  candidate.Family,
+				Adapter: candidate.Adapter,
+				Host:    candidate.Asset.Host,
+				Port:    candidate.Asset.Port,
+				Reasons: candidate.Reasons,
+			}
+			if candidate.Surface != nil {
+				detail.Path = candidate.Surface.Path
+			}
+			summary.CandidateDetails = append(summary.CandidateDetails, detail)
+		}
 	}
 
 	if *jsonFlag {
@@ -99,6 +128,17 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 	fmt.Fprintf(stdout, "Loaded %d scan results for verification\n", summary.Results)
 	fmt.Fprintf(stdout, "Assets: %d\n", summary.Assets)
 	fmt.Fprintf(stdout, "Surfaces: %d\n", summary.Surfaces)
+	fmt.Fprintf(stdout, "Candidates: %d\n", summary.Candidates)
+	for _, candidate := range summary.CandidateDetails {
+		if candidate.Path != "" {
+			fmt.Fprintf(stdout, "- %s (%s) %s:%d%s\n", candidate.CheckID, candidate.Family, candidate.Host, candidate.Port, candidate.Path)
+		} else {
+			fmt.Fprintf(stdout, "- %s (%s) %s:%d\n", candidate.CheckID, candidate.Family, candidate.Host, candidate.Port)
+		}
+		if len(candidate.Reasons) > 0 {
+			fmt.Fprintf(stdout, "  reasons: %s\n", strings.Join(candidate.Reasons, ", "))
+		}
+	}
 	return nil
 }
 

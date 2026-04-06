@@ -166,6 +166,23 @@ func TestSurfacesFromScanResultAddsKubernetesPaths(t *testing.T) {
 	assertSurfacePaths(t, surfaces, []string{"/", "/api", "/apis", "/version"})
 }
 
+func TestSelectorContextFromScanResultAddsKubernetesProductHint(t *testing.T) {
+	result := scanner.ScanResult{
+		Host:     "192.0.2.23",
+		Port:     6443,
+		Protocol: "tcp",
+		Service:  "https",
+		TLS:      &scanner.TLSResult{Version: "TLS 1.3"},
+		Kubernetes: []scanner.KubernetesOrigin{{
+			Cluster: "prod",
+		}},
+	}
+
+	ctx := SelectorContextFromScanResult(result)
+
+	assertStrings(t, "ProductHints", ctx.ProductHints, []string{"kubernetes"})
+}
+
 func TestHeaderHintsSkipsMissingHeaders(t *testing.T) {
 	hints := headerHints([]scanner.HeaderFinding{
 		{Header: "Content-Security-Policy", Detail: "missing CSP; XSS and injection attacks not mitigated"},

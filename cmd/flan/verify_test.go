@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,11 +38,30 @@ func TestRunVerifyCommandJSONSummary(t *testing.T) {
 		t.Fatalf("runVerifyCommand returned error: %v", err)
 	}
 	got := stdout.String()
-	if !strings.Contains(got, `"results": 1`) {
-		t.Fatalf("expected json summary to include results count, got %q", got)
+	var summary verifySummary
+	if err := json.Unmarshal([]byte(got), &summary); err != nil {
+		t.Fatalf("unmarshal verify summary: %v; body=%q", err, got)
 	}
-	if !strings.Contains(got, `"surfaces": 1`) {
-		t.Fatalf("expected json summary to include surface count, got %q", got)
+	if got, want := summary.Results, 1; got != want {
+		t.Fatalf("summary.Results = %d, want %d", got, want)
+	}
+	if got, want := summary.Surfaces, 2; got != want {
+		t.Fatalf("summary.Surfaces = %d, want %d", got, want)
+	}
+	if got, want := summary.Candidates, 1; got != want {
+		t.Fatalf("summary.Candidates = %d, want %d", got, want)
+	}
+	if got, want := len(summary.CandidateDetails), 1; got != want {
+		t.Fatalf("len(summary.CandidateDetails) = %d, want %d", got, want)
+	}
+	if got, want := summary.CandidateDetails[0].CheckID, "generic-web/open-redirect"; got != want {
+		t.Fatalf("summary.CandidateDetails[0].CheckID = %q, want %q", got, want)
+	}
+	if got, want := summary.CandidateDetails[0].Path, "/login?redirect=/"; got != want {
+		t.Fatalf("summary.CandidateDetails[0].Path = %q, want %q", got, want)
+	}
+	if len(summary.CandidateDetails[0].Reasons) == 0 {
+		t.Fatal("expected candidate reasons in summary")
 	}
 }
 
@@ -58,6 +78,26 @@ func TestRunVerifyCommandRequiresInputWithoutPipe(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "requires --input path or piped scan results") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunVerifyCommandPlainSummaryIncludesCandidateReasons(t *testing.T) {
+	path := writeVerifyInput(t, `[{"host":"1.1.1.1","port":80,"protocol":"tcp","service":"http","endpoints":[{"path":"/login?redirect=/","status_code":302}]}]`)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := runVerifyCommand([]string{"--input", path}, &stdout, &stderr); err != nil {
+		t.Fatalf("runVerifyCommand returned error: %v", err)
+	}
+	got := stdout.String()
+	if !strings.Contains(got, "Candidates: 1") {
+		t.Fatalf("expected candidate count in output, got %q", got)
+	}
+	if !strings.Contains(got, "generic-web/open-redirect") {
+		t.Fatalf("expected candidate detail in output, got %q", got)
+	}
+	if !strings.Contains(got, "reasons:") {
+		t.Fatalf("expected candidate reasons in output, got %q", got)
 	}
 }
 
