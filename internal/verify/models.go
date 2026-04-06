@@ -166,7 +166,7 @@ func SelectorContextFromScanResult(result scanner.ScanResult) SelectorContext {
 	return SelectorContext{
 		Asset:           asset,
 		Surfaces:        surfaces,
-		ProductHints:    productHints(asset.Products),
+		ProductHints:    selectorProductHints(asset),
 		AppHints:        appHints(result.App),
 		PathHints:       surfacePaths(surfaces),
 		AuthHints:       surfaceAuthHints(surfaces),
@@ -175,6 +175,14 @@ func SelectorContextFromScanResult(result scanner.ScanResult) SelectorContext {
 		Vulnerabilities: dedupeStrings(result.Vulnerabilities),
 		SecurityHeaders: slices.Clone(result.SecurityHeaders),
 	}
+}
+
+func selectorProductHints(asset Asset) []string {
+	hints := productHints(asset.Products)
+	if len(asset.Kubernetes) > 0 {
+		hints = append(hints, "kubernetes")
+	}
+	return dedupeStrings(hints)
 }
 
 func normalizeSurfacePath(raw string) string {
