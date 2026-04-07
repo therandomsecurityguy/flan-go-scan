@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,14 +24,16 @@ type RuntimeConfig struct {
 	MaxBodyBytes int64
 	MaxRedirects int
 	VerifyTLS    bool
+	Payloads     PayloadConfig
 }
 
 type ExecutionResult struct {
-	Candidate  CandidateCheck `json:"candidate"`
-	Executed   bool           `json:"executed"`
-	DurationMS int64          `json:"duration_ms,omitempty"`
-	Error      string         `json:"error,omitempty"`
-	Evidence   Evidence       `json:"evidence,omitempty"`
+	Candidate  CandidateCheck   `json:"candidate"`
+	Request    GeneratedRequest `json:"request"`
+	Executed   bool             `json:"executed"`
+	DurationMS int64            `json:"duration_ms,omitempty"`
+	Error      string           `json:"error,omitempty"`
+	Evidence   Evidence         `json:"evidence,omitempty"`
 }
 
 func DefaultRuntimeConfig() RuntimeConfig {
@@ -39,6 +42,7 @@ func DefaultRuntimeConfig() RuntimeConfig {
 		Workers:      4,
 		MaxBodyBytes: defaultMaxBodyBytes,
 		MaxRedirects: 0,
+		Payloads:     DefaultPayloadConfig(),
 	}
 }
 
@@ -51,9 +55,11 @@ func ExecuteCandidateChecks(ctx context.Context, candidates []CandidateCheck, cf
 	type job struct {
 		index     int
 		candidate CandidateCheck
+		request   GeneratedRequest
 	}
 
-	results := make([]ExecutionResult, len(candidates))
+	jobsList := expandExecutionJobs(candidates, cfg.Payloads)
+	results := make([]ExecutionResult, len(jobsList))
 	jobs := make(chan job)
 	var wg sync.WaitGroup
 
@@ -62,24 +68,25 @@ func ExecuteCandidateChecks(ctx context.Context, candidates []CandidateCheck, cf
 		go func() {
 			defer wg.Done()
 			for job := range jobs {
-				results[job.index] = executeCandidateCheck(ctx, job.candidate, cfg)
+				results[job.index] = executeCandidateCheck(ctx, job.candidate, job.request, cfg)
 			}
 		}()
 	}
 
-	for i, candidate := range candidates {
+	for i, jobItem := range jobsList {
 		select {
 		case <-ctx.Done():
 			close(jobs)
 			wg.Wait()
-			for j := i; j < len(candidates); j++ {
+			for j := i; j < len(jobsList); j++ {
 				results[j] = ExecutionResult{
-					Candidate: candidates[j],
+					Candidate: jobsList[j].candidate,
+					Request:   jobsList[j].request,
 					Error:     ctx.Err().Error(),
 				}
 			}
 			return results
-		case jobs <- job{index: i, candidate: candidate}:
+		case jobs <- job{index: i, candidate: jobItem.candidate, request: jobItem.request}:
 		}
 	}
 	close(jobs)
@@ -100,11 +107,34 @@ func normalizeRuntimeConfig(cfg RuntimeConfig) RuntimeConfig {
 	if cfg.MaxRedirects < 0 {
 		cfg.MaxRedirects = 0
 	}
+	cfg.Payloads = normalizePayloadConfig(cfg.Payloads)
 	return cfg
 }
 
-func executeCandidateCheck(parent context.Context, candidate CandidateCheck, cfg RuntimeConfig) ExecutionResult {
-	result := ExecutionResult{Candidate: candidate}
+func expandExecutionJobs(candidates []CandidateCheck, cfg PayloadConfig) []struct {
+	candidate CandidateCheck
+	request   GeneratedRequest
+} {
+	jobs := make([]struct {
+		candidate CandidateCheck
+		request   GeneratedRequest
+	}, 0, len(candidates))
+	for _, candidate := range candidates {
+		for _, request := range ExpandCandidateRequests(candidate, cfg) {
+			jobs = append(jobs, struct {
+				candidate CandidateCheck
+				request   GeneratedRequest
+			}{
+				candidate: candidate,
+				request:   request,
+			})
+		}
+	}
+	return jobs
+}
+
+func executeCandidateCheck(parent context.Context, candidate CandidateCheck, request GeneratedRequest, cfg RuntimeConfig) ExecutionResult {
+	result := ExecutionResult{Candidate: candidate, Request: request}
 	if candidate.Surface == nil {
 		result.Error = "candidate has no surface"
 		return result
@@ -114,7 +144,7 @@ func executeCandidateCheck(parent context.Context, candidate CandidateCheck, cfg
 		return result
 	}
 
-	reqURL, err := candidateURL(candidate)
+	reqURL, err := candidateURL(candidate, request)
 	if err != nil {
 		result.Error = err.Error()
 		return result
@@ -123,13 +153,15 @@ func executeCandidateCheck(parent context.Context, candidate CandidateCheck, cfg
 	reqCtx, cancel := context.WithTimeout(parent, cfg.Timeout)
 	defer cancel()
 
-	method := candidateMethod(candidate)
-	req, err := http.NewRequestWithContext(reqCtx, method, reqURL, nil)
+	req, err := http.NewRequestWithContext(reqCtx, request.Method, reqURL, strings.NewReader(request.Body))
 	if err != nil {
 		result.Error = fmt.Sprintf("build request: %v", err)
 		return result
 	}
 	req.Header.Set("User-Agent", "flan-verify/1.0")
+	for key, value := range request.Headers {
+		req.Header.Set(key, value)
+	}
 	if candidate.Asset.Hostname != "" {
 		req.Host = candidate.Asset.Hostname
 	}
@@ -167,8 +199,8 @@ func executeCandidateCheck(parent context.Context, candidate CandidateCheck, cfg
 		Request: &HTTPRequestEvidence{
 			Method:  req.Method,
 			URL:     req.URL.String(),
-			Headers: map[string]string{"User-Agent": "flan-verify/1.0"},
-			Body:    "",
+			Headers: requestHeaders(req.Header),
+			Body:    request.Body,
 		},
 		Response: &HTTPResponseEvidence{
 			StatusCode: resp.StatusCode,
@@ -179,27 +211,14 @@ func executeCandidateCheck(parent context.Context, candidate CandidateCheck, cfg
 	if req.Host != "" {
 		result.Evidence.Request.Headers["Host"] = req.Host
 	}
-	result.Evidence.Matches = evaluateExecution(candidate, result.Evidence)
+	result.Evidence.Matches = evaluateExecution(candidate, request, result.Evidence)
 	if len(result.Evidence.Matches) > 0 {
 		result.Evidence.Matcher = result.Evidence.Matches[0].Name
 	}
 	return result
 }
 
-func candidateMethod(candidate CandidateCheck) string {
-	if candidate.Surface == nil || len(candidate.Surface.MethodHints) == 0 {
-		return http.MethodGet
-	}
-	method := strings.ToUpper(strings.TrimSpace(candidate.Surface.MethodHints[0]))
-	switch method {
-	case http.MethodGet, http.MethodHead, http.MethodOptions:
-		return method
-	default:
-		return http.MethodGet
-	}
-}
-
-func candidateURL(candidate CandidateCheck) (string, error) {
+func candidateURL(candidate CandidateCheck, request GeneratedRequest) (string, error) {
 	if candidate.Surface == nil {
 		return "", errors.New("candidate has no surface")
 	}
@@ -212,7 +231,7 @@ func candidateURL(candidate CandidateCheck) (string, error) {
 		urlHost = "[" + host + "]"
 	}
 	scheme := scanner.HTTPScheme(candidate.Asset.TLS != nil || strings.Contains(strings.ToLower(candidate.Asset.Service), "https"))
-	return fmt.Sprintf("%s://%s:%d%s", scheme, urlHost, candidate.Asset.Port, normalizeSurfacePath(candidate.Surface.Path)), nil
+	return fmt.Sprintf("%s://%s:%d%s", scheme, urlHost, candidate.Asset.Port, normalizeSurfacePath(request.Path)), nil
 }
 
 func runtimeHTTPTransport(asset Asset, cfg RuntimeConfig) *http.Transport {
@@ -256,6 +275,20 @@ func cloneHeader(header http.Header) map[string][]string {
 	return out
 }
 
+func requestHeaders(header http.Header) map[string]string {
+	if len(header) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(header))
+	for key, values := range header {
+		if len(values) == 0 {
+			continue
+		}
+		out[key] = values[0]
+	}
+	return out
+}
+
 func baselineDetail(statusCode int, truncated bool) string {
 	detail := "http response captured: status " + strconv.Itoa(statusCode)
 	if truncated {
@@ -287,13 +320,13 @@ func curlForRequest(req *http.Request) string {
 	return strings.Join(parts, " ")
 }
 
-func evaluateExecution(candidate CandidateCheck, evidence Evidence) []MatchResult {
+func evaluateExecution(candidate CandidateCheck, request GeneratedRequest, evidence Evidence) []MatchResult {
 	if evidence.Response == nil {
 		return nil
 	}
 	switch candidate.Family {
 	case "open-redirect":
-		return evaluateOpenRedirectMatch(evidence.Response)
+		return evaluateOpenRedirectMatch(request, evidence.Response)
 	case "unauth-api":
 		return evaluateUnauthAPIMatch(candidate, evidence.Response)
 	default:
@@ -301,9 +334,9 @@ func evaluateExecution(candidate CandidateCheck, evidence Evidence) []MatchResul
 	}
 }
 
-func evaluateOpenRedirectMatch(response *HTTPResponseEvidence) []MatchResult {
+func evaluateOpenRedirectMatch(request GeneratedRequest, response *HTTPResponseEvidence) []MatchResult {
 	location := firstHeaderValue(response.Headers, "Location")
-	if response.StatusCode >= 300 && response.StatusCode < 400 && location != "" {
+	if response.StatusCode >= 300 && response.StatusCode < 400 && isExternalRedirectMatch(location, request.Path) {
 		return []MatchResult{{
 			Name:   "redirect-location",
 			Detail: "redirect status and Location header observed: " + location,
@@ -314,6 +347,9 @@ func evaluateOpenRedirectMatch(response *HTTPResponseEvidence) []MatchResult {
 
 func evaluateUnauthAPIMatch(candidate CandidateCheck, response *HTTPResponseEvidence) []MatchResult {
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil
+	}
+	if !isVerifiedUnauthAPIResponse(candidate, response) {
 		return nil
 	}
 	detail := "reachable API response observed"
@@ -327,6 +363,60 @@ func evaluateUnauthAPIMatch(candidate CandidateCheck, response *HTTPResponseEvid
 		Name:   "reachable-api",
 		Detail: detail,
 	}}
+}
+
+func isExternalRedirectMatch(location, requestPath string) bool {
+	location = strings.TrimSpace(location)
+	if location == "" {
+		return false
+	}
+	if value, ok := queryParamValue(requestPath, redirectParams); ok && strings.EqualFold(strings.TrimSpace(value), location) {
+		return true
+	}
+	locationLower := strings.ToLower(location)
+	return strings.Contains(locationLower, "verify.invalid")
+}
+
+func isVerifiedUnauthAPIResponse(candidate CandidateCheck, response *HTTPResponseEvidence) bool {
+	body := strings.ToLower(strings.TrimSpace(response.Body))
+	contentType := strings.ToLower(firstHeaderValue(response.Headers, "Content-Type"))
+	switch candidate.Adapter {
+	case "kubernetes":
+		if candidate.Surface == nil {
+			return false
+		}
+		path := normalizeSurfacePath(candidate.Surface.Path)
+		switch path {
+		case "/version":
+			return strings.Contains(contentType, "json") && strings.Contains(body, "gitversion")
+		case "/api", "/apis":
+			return strings.Contains(contentType, "json") && strings.Contains(body, "versions")
+		}
+	case "vault":
+		return strings.Contains(contentType, "json") &&
+			strings.Contains(body, "\"sealed\"") &&
+			strings.Contains(body, "\"initialized\"")
+	case "consul":
+		return strings.Contains(contentType, "json") &&
+			strings.Contains(body, "\"config\"") &&
+			strings.Contains(body, "\"member\"")
+	}
+	return false
+}
+
+func queryParamValue(rawPath string, params map[string]struct{}) (string, bool) {
+	parsed, err := url.Parse(normalizeSurfacePath(rawPath))
+	if err != nil {
+		return "", false
+	}
+	query := parsed.Query()
+	for key, values := range query {
+		if _, ok := params[strings.ToLower(strings.TrimSpace(key))]; !ok || len(values) == 0 {
+			continue
+		}
+		return values[0], true
+	}
+	return "", false
 }
 
 func firstHeaderValue(headers map[string][]string, key string) string {

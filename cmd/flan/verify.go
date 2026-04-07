@@ -24,6 +24,7 @@ type verifySummary struct {
 	Assets           int                      `json:"assets"`
 	Surfaces         int                      `json:"surfaces"`
 	Candidates       int                      `json:"candidates"`
+	Requests         int                      `json:"requests,omitempty"`
 	CandidateDetails []verifyCandidateSummary `json:"candidate_details,omitempty"`
 	Executed         int                      `json:"executed,omitempty"`
 	Failures         int                      `json:"failures,omitempty"`
@@ -48,6 +49,7 @@ type verifyExecutionSummary struct {
 	Host       string               `json:"host"`
 	Port       int                  `json:"port"`
 	Path       string               `json:"path,omitempty"`
+	Request    string               `json:"request,omitempty"`
 	Executed   bool                 `json:"executed"`
 	StatusCode int                  `json:"status_code,omitempty"`
 	DurationMS int64                `json:"duration_ms,omitempty"`
@@ -83,6 +85,7 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 	runFlag := fs.Bool("run", false, "")
 	timeoutFlag := fs.Duration("timeout", 5*time.Second, "")
 	workersFlag := fs.Int("workers", 4, "")
+	maxPayloadsFlag := fs.Int("max-payloads", 4, "")
 	maxBodyBytesFlag := fs.Int64("max-body-bytes", 8192, "")
 	maxRedirectsFlag := fs.Int("max-redirects", 0, "")
 	verifyTLSFlag := fs.Bool("tls-verify", false, "")
@@ -96,6 +99,7 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(w, "  --run\texecute selected HTTP candidates and capture baseline evidence\n")
 		fmt.Fprintf(w, "  --timeout duration\trequest timeout for executed candidates\n")
 		fmt.Fprintf(w, "  --workers int\tmax concurrent candidate executions\n")
+		fmt.Fprintf(w, "  --max-payloads int\tmaximum generated requests per candidate\n")
 		fmt.Fprintf(w, "  --max-body-bytes int\tmaximum response body bytes to capture per execution\n")
 		fmt.Fprintf(w, "  --max-redirects int\tmaximum redirects to follow when executing candidates (0 = do not follow)\n")
 		fmt.Fprintf(w, "  --tls-verify\tverify TLS certificates when executing HTTPS candidates\n")
@@ -163,7 +167,11 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 				MaxBodyBytes: *maxBodyBytesFlag,
 				MaxRedirects: *maxRedirectsFlag,
 				VerifyTLS:    *verifyTLSFlag,
+				Payloads: verifymodel.PayloadConfig{
+					MaxPayloadsPerCandidate: *maxPayloadsFlag,
+				},
 			})
+			summary.Requests += len(executions)
 			for _, execution := range executions {
 				if execution.Executed {
 					summary.Executed++
@@ -178,6 +186,7 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 					Adapter:    execution.Candidate.Adapter,
 					Host:       execution.Candidate.Asset.Host,
 					Port:       execution.Candidate.Asset.Port,
+					Request:    execution.Request.Label,
 					Executed:   execution.Executed,
 					DurationMS: execution.DurationMS,
 					Error:      execution.Error,
@@ -222,6 +231,7 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 	if *runFlag {
+		fmt.Fprintf(stdout, "Requests: %d\n", summary.Requests)
 		fmt.Fprintf(stdout, "Executed: %d\n", summary.Executed)
 		fmt.Fprintf(stdout, "Failures: %d\n", summary.Failures)
 		fmt.Fprintf(stdout, "Matched: %d\n", summary.Matched)
@@ -239,6 +249,9 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 			fmt.Fprintln(stdout, line)
 			if execution.Detail != "" {
 				fmt.Fprintf(stdout, "  detail: %s\n", execution.Detail)
+			}
+			if execution.Request != "" {
+				fmt.Fprintf(stdout, "  request: %s\n", execution.Request)
 			}
 			for _, match := range execution.Matches {
 				fmt.Fprintf(stdout, "  match: %s", match.Name)
