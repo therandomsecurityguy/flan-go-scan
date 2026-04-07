@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/therandomsecurityguy/flan-go-scan/internal/output"
 	verifymodel "github.com/therandomsecurityguy/flan-go-scan/internal/verify"
@@ -23,6 +25,10 @@ type verifySummary struct {
 	Surfaces         int                      `json:"surfaces"`
 	Candidates       int                      `json:"candidates"`
 	CandidateDetails []verifyCandidateSummary `json:"candidate_details,omitempty"`
+	Executed         int                      `json:"executed,omitempty"`
+	Failures         int                      `json:"failures,omitempty"`
+	Matched          int                      `json:"matched,omitempty"`
+	ExecutionDetails []verifyExecutionSummary `json:"execution_details,omitempty"`
 }
 
 type verifyCandidateSummary struct {
@@ -33,6 +39,27 @@ type verifyCandidateSummary struct {
 	Port    int      `json:"port"`
 	Path    string   `json:"path,omitempty"`
 	Reasons []string `json:"reasons,omitempty"`
+}
+
+type verifyExecutionSummary struct {
+	CheckID    string               `json:"check_id"`
+	Family     string               `json:"family"`
+	Adapter    string               `json:"adapter,omitempty"`
+	Host       string               `json:"host"`
+	Port       int                  `json:"port"`
+	Path       string               `json:"path,omitempty"`
+	Executed   bool                 `json:"executed"`
+	StatusCode int                  `json:"status_code,omitempty"`
+	DurationMS int64                `json:"duration_ms,omitempty"`
+	Error      string               `json:"error,omitempty"`
+	Detail     string               `json:"detail,omitempty"`
+	Reasons    []string             `json:"reasons,omitempty"`
+	Matches    []verifyMatchSummary `json:"matches,omitempty"`
+}
+
+type verifyMatchSummary struct {
+	Name   string `json:"name"`
+	Detail string `json:"detail,omitempty"`
 }
 
 func dispatchSubcommand(args []string, stdout, stderr io.Writer) (bool, error) {
@@ -53,6 +80,12 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 	inputPath := fs.String("input", "", "")
 	inputShort := fs.String("i", "", "")
 	jsonFlag := fs.Bool("json", false, "")
+	runFlag := fs.Bool("run", false, "")
+	timeoutFlag := fs.Duration("timeout", 5*time.Second, "")
+	workersFlag := fs.Int("workers", 4, "")
+	maxBodyBytesFlag := fs.Int64("max-body-bytes", 8192, "")
+	maxRedirectsFlag := fs.Int("max-redirects", 0, "")
+	verifyTLSFlag := fs.Bool("tls-verify", false, "")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "Usage:")
 		fmt.Fprintln(stderr, "  flan verify [flags]")
@@ -60,6 +93,12 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 		w := tabwriter.NewWriter(stderr, 0, 0, 2, ' ', 0)
 		fmt.Fprintf(w, "  --input, -i string\tpath to scan results in JSON or JSONL format; use - for stdin\n")
 		fmt.Fprintf(w, "  --json\toutput summary as JSON\n")
+		fmt.Fprintf(w, "  --run\texecute selected HTTP candidates and capture baseline evidence\n")
+		fmt.Fprintf(w, "  --timeout duration\trequest timeout for executed candidates\n")
+		fmt.Fprintf(w, "  --workers int\tmax concurrent candidate executions\n")
+		fmt.Fprintf(w, "  --max-body-bytes int\tmaximum response body bytes to capture per execution\n")
+		fmt.Fprintf(w, "  --max-redirects int\tmaximum redirects to follow when executing candidates (0 = do not follow)\n")
+		fmt.Fprintf(w, "  --tls-verify\tverify TLS certificates when executing HTTPS candidates\n")
 		_ = w.Flush()
 		fmt.Fprintln(stderr)
 		fmt.Fprintln(stderr, "Examples:")
@@ -117,6 +156,49 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 			}
 			summary.CandidateDetails = append(summary.CandidateDetails, detail)
 		}
+		if *runFlag && len(candidates) > 0 {
+			executions := verifymodel.ExecuteCandidateChecks(context.Background(), candidates, verifymodel.RuntimeConfig{
+				Timeout:      *timeoutFlag,
+				Workers:      *workersFlag,
+				MaxBodyBytes: *maxBodyBytesFlag,
+				MaxRedirects: *maxRedirectsFlag,
+				VerifyTLS:    *verifyTLSFlag,
+			})
+			for _, execution := range executions {
+				if execution.Executed {
+					summary.Executed++
+				}
+				if execution.Error != "" {
+					summary.Failures++
+				}
+				summary.Matched += len(execution.Evidence.Matches)
+				detail := verifyExecutionSummary{
+					CheckID:    execution.Candidate.CheckID,
+					Family:     execution.Candidate.Family,
+					Adapter:    execution.Candidate.Adapter,
+					Host:       execution.Candidate.Asset.Host,
+					Port:       execution.Candidate.Asset.Port,
+					Executed:   execution.Executed,
+					DurationMS: execution.DurationMS,
+					Error:      execution.Error,
+					Reasons:    execution.Candidate.Reasons,
+				}
+				if execution.Candidate.Surface != nil {
+					detail.Path = execution.Candidate.Surface.Path
+				}
+				if execution.Evidence.Response != nil {
+					detail.StatusCode = execution.Evidence.Response.StatusCode
+				}
+				detail.Detail = execution.Evidence.Detail
+				for _, match := range execution.Evidence.Matches {
+					detail.Matches = append(detail.Matches, verifyMatchSummary{
+						Name:   match.Name,
+						Detail: match.Detail,
+					})
+				}
+				summary.ExecutionDetails = append(summary.ExecutionDetails, detail)
+			}
+		}
 	}
 
 	if *jsonFlag {
@@ -137,6 +219,34 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 		}
 		if len(candidate.Reasons) > 0 {
 			fmt.Fprintf(stdout, "  reasons: %s\n", strings.Join(candidate.Reasons, ", "))
+		}
+	}
+	if *runFlag {
+		fmt.Fprintf(stdout, "Executed: %d\n", summary.Executed)
+		fmt.Fprintf(stdout, "Failures: %d\n", summary.Failures)
+		fmt.Fprintf(stdout, "Matched: %d\n", summary.Matched)
+		for _, execution := range summary.ExecutionDetails {
+			line := fmt.Sprintf("- %s (%s) %s:%d", execution.CheckID, execution.Family, execution.Host, execution.Port)
+			if execution.Path != "" {
+				line += execution.Path
+			}
+			if execution.Executed && execution.StatusCode > 0 {
+				line += fmt.Sprintf(" status=%d", execution.StatusCode)
+			}
+			if execution.Error != "" {
+				line += " error=" + execution.Error
+			}
+			fmt.Fprintln(stdout, line)
+			if execution.Detail != "" {
+				fmt.Fprintf(stdout, "  detail: %s\n", execution.Detail)
+			}
+			for _, match := range execution.Matches {
+				fmt.Fprintf(stdout, "  match: %s", match.Name)
+				if match.Detail != "" {
+					fmt.Fprintf(stdout, " - %s", match.Detail)
+				}
+				fmt.Fprintln(stdout)
+			}
 		}
 	}
 	return nil

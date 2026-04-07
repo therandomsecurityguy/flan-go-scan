@@ -75,12 +75,18 @@ type HTTPResponseEvidence struct {
 	Body       string              `json:"body,omitempty"`
 }
 
+type MatchResult struct {
+	Name   string `json:"name"`
+	Detail string `json:"detail,omitempty"`
+}
+
 type Evidence struct {
 	Matcher  string                `json:"matcher,omitempty"`
 	Detail   string                `json:"detail,omitempty"`
 	Curl     string                `json:"curl,omitempty"`
 	Request  *HTTPRequestEvidence  `json:"request,omitempty"`
 	Response *HTTPResponseEvidence `json:"response,omitempty"`
+	Matches  []MatchResult         `json:"matches,omitempty"`
 }
 
 type Finding struct {
