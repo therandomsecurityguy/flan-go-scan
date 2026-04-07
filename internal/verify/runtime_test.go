@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExecuteCandidateChecksCapturesHTTPEvidence(t *testing.T) {
@@ -15,7 +16,7 @@ func TestExecuteCandidateChecksCapturesHTTPEvidence(t *testing.T) {
 		if got, want := r.Host, "app.example.test"; got != want {
 			t.Fatalf("request Host = %q, want %q", got, want)
 		}
-		w.Header().Set("Location", "https://example.com")
+		w.Header().Set("Location", r.URL.Query().Get("redirect"))
 		w.WriteHeader(http.StatusFound)
 		_, _ = w.Write([]byte("redirect body"))
 	}))
@@ -32,11 +33,15 @@ func TestExecuteCandidateChecksCapturesHTTPEvidence(t *testing.T) {
 			Port:     port,
 			Service:  "http",
 		},
-		Surface: &Surface{Path: "/login?redirect=/", MethodHints: []string{"GET"}},
+		Surface: &Surface{Path: "/login?redirect=/", Params: []string{"redirect"}, MethodHints: []string{"GET"}},
 	}}, RuntimeConfig{
 		Timeout:      2 * defaultRuntimeConfig().Timeout / 5,
 		Workers:      1,
 		MaxBodyBytes: 64,
+		Payloads: PayloadConfig{
+			MaxPayloadsPerCandidate: 1,
+			ExternalRedirectTarget:  "https://verify.invalid/flan",
+		},
 	})
 
 	if got, want := len(results), 1; got != want {
@@ -52,8 +57,8 @@ func TestExecuteCandidateChecksCapturesHTTPEvidence(t *testing.T) {
 	if got, want := result.Evidence.Response.StatusCode, http.StatusFound; got != want {
 		t.Fatalf("status = %d, want %d", got, want)
 	}
-	if got := result.Evidence.Response.Headers["Location"]; len(got) != 1 || got[0] != "https://example.com" {
-		t.Fatalf("location header = %v, want https://example.com", got)
+	if got := result.Evidence.Response.Headers["Location"]; len(got) != 1 || got[0] != "https://verify.invalid/flan" {
+		t.Fatalf("location header = %v, want https://verify.invalid/flan", got)
 	}
 	if got, want := result.Evidence.Request.Headers["Host"], "app.example.test"; got != want {
 		t.Fatalf("request Host header = %q, want %q", got, want)
@@ -66,6 +71,41 @@ func TestExecuteCandidateChecksCapturesHTTPEvidence(t *testing.T) {
 	}
 	if !strings.Contains(result.Evidence.Curl, "curl -i -X GET") {
 		t.Fatalf("curl repro = %q, want GET curl", result.Evidence.Curl)
+	}
+	if got, want := result.Request.Label, "absolute-external:redirect"; got != want {
+		t.Fatalf("request label = %q, want %q", got, want)
+	}
+}
+
+func TestExecuteCandidateChecksDoesNotMatchInternalRedirect(t *testing.T) {
+	server := newIPv4Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "/dashboard")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer server.Close()
+
+	host, port := serverHostPort(t, server)
+	results := ExecuteCandidateChecks(context.Background(), []CandidateCheck{{
+		CheckID: "generic-web/open-redirect",
+		Family:  "open-redirect",
+		Adapter: "generic-web",
+		Asset: Asset{
+			Host:    host,
+			Port:    port,
+			Service: "http",
+		},
+		Surface: &Surface{Path: "/login?redirect=/", Params: []string{"redirect"}, MethodHints: []string{"GET"}},
+	}}, RuntimeConfig{
+		Timeout:  5 * time.Second,
+		Workers:  1,
+		Payloads: PayloadConfig{MaxPayloadsPerCandidate: 1},
+	})
+
+	if got, want := len(results), 1; got != want {
+		t.Fatalf("len(results) = %d, want %d", got, want)
+	}
+	if got := len(results[0].Evidence.Matches); got != 0 {
+		t.Fatalf("len(results[0].Evidence.Matches) = %d, want 0", got)
 	}
 }
 
@@ -88,7 +128,11 @@ func TestExecuteCandidateChecksUsesSafeMethodHints(t *testing.T) {
 			Service: "http",
 		},
 		Surface: &Surface{Path: "/", MethodHints: []string{"HEAD"}},
-	}}, DefaultRuntimeConfig())
+	}}, RuntimeConfig{
+		Timeout:  5 * time.Second,
+		Workers:  1,
+		Payloads: PayloadConfig{MaxPayloadsPerCandidate: 1},
+	})
 
 	if got, want := len(results), 1; got != want {
 		t.Fatalf("len(results) = %d, want %d", got, want)
@@ -122,6 +166,75 @@ func TestExecuteCandidateChecksRejectsNonHTTPService(t *testing.T) {
 	}
 	if got, want := results[0].Error, "candidate service is not HTTP"; got != want {
 		t.Fatalf("result.Error = %q, want %q", got, want)
+	}
+}
+
+func TestExecuteCandidateChecksMatchesVaultUnauthAPIWithExpectedShape(t *testing.T) {
+	server := newIPv4Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"initialized":true,"sealed":false,"standby":false}`))
+	}))
+	defer server.Close()
+
+	host, port := serverHostPort(t, server)
+	results := ExecuteCandidateChecks(context.Background(), []CandidateCheck{{
+		CheckID: "vault/unauth-api",
+		Family:  "unauth-api",
+		Adapter: "vault",
+		Asset: Asset{
+			Host:    host,
+			Port:    port,
+			Service: "http",
+		},
+		Surface: &Surface{Path: "/v1/sys/health", MethodHints: []string{"GET"}},
+	}}, RuntimeConfig{
+		Timeout:  5 * time.Second,
+		Workers:  1,
+		Payloads: PayloadConfig{MaxPayloadsPerCandidate: 1},
+	})
+
+	if got, want := len(results), 1; got != want {
+		t.Fatalf("len(results) = %d, want %d", got, want)
+	}
+	if got, want := len(results[0].Evidence.Matches), 1; got != want {
+		t.Fatalf("len(results[0].Evidence.Matches) = %d, want %d", got, want)
+	}
+	if got, want := results[0].Evidence.Matches[0].Name, "reachable-api"; got != want {
+		t.Fatalf("match name = %q, want %q", got, want)
+	}
+}
+
+func TestExecuteCandidateChecksDoesNotMatchGeneric200AsUnauthAPI(t *testing.T) {
+	server := newIPv4Server(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("<html>ok</html>"))
+	}))
+	defer server.Close()
+
+	host, port := serverHostPort(t, server)
+	results := ExecuteCandidateChecks(context.Background(), []CandidateCheck{{
+		CheckID: "vault/unauth-api",
+		Family:  "unauth-api",
+		Adapter: "vault",
+		Asset: Asset{
+			Host:    host,
+			Port:    port,
+			Service: "http",
+		},
+		Surface: &Surface{Path: "/v1/sys/health", MethodHints: []string{"GET"}},
+	}}, RuntimeConfig{
+		Timeout:  5 * time.Second,
+		Workers:  1,
+		Payloads: PayloadConfig{MaxPayloadsPerCandidate: 1},
+	})
+
+	if got, want := len(results), 1; got != want {
+		t.Fatalf("len(results) = %d, want %d", got, want)
+	}
+	if got := len(results[0].Evidence.Matches); got != 0 {
+		t.Fatalf("len(results[0].Evidence.Matches) = %d, want 0", got)
 	}
 }
 

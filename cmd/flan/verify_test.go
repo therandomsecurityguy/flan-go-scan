@@ -87,7 +87,7 @@ func TestRunVerifyCommandPlainSummaryIncludesCandidateReasons(t *testing.T) {
 
 func TestRunVerifyCommandJSONRunIncludesExecutionDetails(t *testing.T) {
 	server := newIPv4VerifyServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Location", "https://example.com")
+		w.Header().Set("Location", r.URL.Query().Get("redirect"))
 		w.WriteHeader(http.StatusFound)
 	}))
 	defer server.Close()
@@ -97,7 +97,7 @@ func TestRunVerifyCommandJSONRunIncludesExecutionDetails(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if err := runVerifyCommand([]string{"--input", path, "--json", "--run", "--workers", "1"}, &stdout, &stderr); err != nil {
+	if err := runVerifyCommand([]string{"--input", path, "--json", "--run", "--workers", "1", "--max-payloads", "1"}, &stdout, &stderr); err != nil {
 		t.Fatalf("runVerifyCommand returned error: %v", err)
 	}
 	var summary verifySummary
@@ -106,6 +106,9 @@ func TestRunVerifyCommandJSONRunIncludesExecutionDetails(t *testing.T) {
 	}
 	if got, want := summary.Executed, 1; got != want {
 		t.Fatalf("summary.Executed = %d, want %d", got, want)
+	}
+	if got, want := summary.Requests, 1; got != want {
+		t.Fatalf("summary.Requests = %d, want %d", got, want)
 	}
 	if got, want := len(summary.ExecutionDetails), 1; got != want {
 		t.Fatalf("len(summary.ExecutionDetails) = %d, want %d", got, want)
@@ -124,6 +127,9 @@ func TestRunVerifyCommandJSONRunIncludesExecutionDetails(t *testing.T) {
 	}
 	if got, want := summary.ExecutionDetails[0].Matches[0].Name, "redirect-location"; got != want {
 		t.Fatalf("summary.ExecutionDetails[0].Matches[0].Name = %q, want %q", got, want)
+	}
+	if got, want := summary.ExecutionDetails[0].Request, "absolute-external:redirect"; got != want {
+		t.Fatalf("summary.ExecutionDetails[0].Request = %q, want %q", got, want)
 	}
 }
 
