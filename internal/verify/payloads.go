@@ -7,6 +7,7 @@ import (
 )
 
 const defaultExternalRedirectTarget = "https://verify.invalid/flan"
+const openRedirectControlLabel = "baseline-control"
 
 type PayloadConfig struct {
 	MaxPayloadsPerCandidate int
@@ -78,40 +79,103 @@ func expandOpenRedirectRequests(candidate CandidateCheck, cfg PayloadConfig) []G
 	if candidate.Surface == nil {
 		return nil
 	}
-	redirectParams := findParams(candidate.Surface.Params, redirectParams)
+	redirectParams := openRedirectSinkParams(candidate.Surface)
 	if len(redirectParams) == 0 {
 		return nil
 	}
 
-	payloads := []struct {
-		label      string
-		value      string
-		preEncoded bool
-	}{
-		{label: "absolute-external", value: cfg.ExternalRedirectTarget},
-		{label: "scheme-relative", value: "//verify.invalid/flan"},
-		{label: "encoded-external", value: "https:%2f%2fverify.invalid%2fflan", preEncoded: true},
-		{label: "path-confusion", value: "/\\verify.invalid/flan"},
-	}
-
+	payloads := openRedirectPayloads(cfg)
+	baseline := baselineGeneratedRequest(candidate)
 	requests := make([]GeneratedRequest, 0, cfg.MaxPayloadsPerCandidate)
+	if cfg.MaxPayloadsPerCandidate > 1 {
+		requests = append(requests, GeneratedRequest{
+			Label:  openRedirectControlLabel,
+			Method: baseline.Method,
+			Path:   baseline.Path,
+		})
+	}
 	for _, param := range redirectParams {
 		for _, payload := range payloads {
 			if len(requests) >= cfg.MaxPayloadsPerCandidate {
 				return requests
 			}
-			mutatedPath, ok := mutateQueryParam(candidate.Surface.Path, param, payload.value, payload.preEncoded)
+			mutatedPath, ok := upsertQueryParam(candidate.Surface.Path, param, payload.value, payload.preEncoded)
 			if !ok {
 				continue
 			}
 			requests = append(requests, GeneratedRequest{
 				Label:  payload.label + ":" + param,
-				Method: baselineGeneratedRequest(candidate).Method,
+				Method: baseline.Method,
 				Path:   mutatedPath,
 			})
 		}
 	}
 	return requests
+}
+
+func openRedirectPayloads(cfg PayloadConfig) []struct {
+	label      string
+	value      string
+	preEncoded bool
+} {
+	target := strings.TrimSpace(cfg.ExternalRedirectTarget)
+	if target == "" {
+		target = defaultExternalRedirectTarget
+	}
+	parsed, err := url.Parse(target)
+	if err != nil || strings.TrimSpace(parsed.Host) == "" {
+		target = defaultExternalRedirectTarget
+		parsed, _ = url.Parse(target)
+	}
+	targetPath := parsed.EscapedPath()
+	if targetPath == "" {
+		targetPath = "/"
+	}
+	if parsed.RawQuery != "" {
+		targetPath += "?" + parsed.RawQuery
+	}
+	schemeRelative := "//" + parsed.Host + targetPath
+	pathConfusion := "/\\" + parsed.Host + targetPath
+	encodedExternal := strings.ToLower(url.QueryEscape(target))
+	return []struct {
+		label      string
+		value      string
+		preEncoded bool
+	}{
+		{label: "absolute-external", value: target},
+		{label: "scheme-relative", value: schemeRelative},
+		{label: "encoded-external", value: encodedExternal, preEncoded: true},
+		{label: "path-confusion", value: pathConfusion},
+	}
+}
+
+func openRedirectSinkParams(surface *Surface) []string {
+	if surface == nil {
+		return nil
+	}
+	params := findParams(surface.Params, redirectParams)
+	if len(params) > 0 {
+		return params
+	}
+
+	inferred := make([]string, 0, 4)
+	if hasHint(surface.AuthHints, "oauth") {
+		inferred = append(inferred, "redirect_uri", "next")
+	}
+	if pathHasAny(surface.Path, []string{"/redirect", "/continue", "/callback", "/return", "/logout", "/out", "/jump"}) {
+		inferred = append(inferred, "redirect", "next", "url")
+	}
+	if surface.StatusCode >= 300 && surface.StatusCode < 400 {
+		inferred = append(inferred, "next", "redirect")
+	}
+	if strings.TrimSpace(surface.RedirectTo) != "" {
+		inferred = append(inferred, "redirect", "url")
+	}
+	inferred = dedupeStringsInOrder(inferred)
+	if len(inferred) > 3 {
+		return inferred[:3]
+	}
+	return inferred
 }
 
 func expandTraversalRequests(candidate CandidateCheck, cfg PayloadConfig) []GeneratedRequest {
@@ -197,4 +261,45 @@ func mutateQueryParam(rawPath, param, value string, preEncoded bool) (string, bo
 	}
 	parsed.RawQuery = strings.Join(parts, "&")
 	return normalizeSurfacePath(parsed.Path + "?" + parsed.RawQuery), true
+}
+
+func upsertQueryParam(rawPath, param, value string, preEncoded bool) (string, bool) {
+	if mutated, ok := mutateQueryParam(rawPath, param, value, preEncoded); ok {
+		return mutated, true
+	}
+	parsed, err := url.Parse(normalizeSurfacePath(rawPath))
+	if err != nil {
+		return "", false
+	}
+	encodedValue := url.QueryEscape(value)
+	if preEncoded {
+		encodedValue = value
+	}
+	fragment := url.QueryEscape(param) + "=" + encodedValue
+	if parsed.RawQuery == "" {
+		parsed.RawQuery = fragment
+	} else {
+		parsed.RawQuery += "&" + fragment
+	}
+	return normalizeSurfacePath(parsed.Path + "?" + parsed.RawQuery), true
+}
+
+func dedupeStringsInOrder(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }

@@ -97,39 +97,45 @@ func TestRunVerifyCommandJSONRunIncludesExecutionDetails(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if err := runVerifyCommand([]string{"--input", path, "--json", "--run", "--workers", "1", "--max-payloads", "1"}, &stdout, &stderr); err != nil {
+	if err := runVerifyCommand([]string{"--input", path, "--json", "--run", "--debug-executions", "--workers", "1", "--max-payloads", "2"}, &stdout, &stderr); err != nil {
 		t.Fatalf("runVerifyCommand returned error: %v", err)
 	}
 	var summary verifySummary
 	if err := json.Unmarshal(stdout.Bytes(), &summary); err != nil {
 		t.Fatalf("unmarshal verify summary: %v; body=%q", err, stdout.String())
 	}
-	if got, want := summary.Executed, 1; got != want {
+	if got, want := summary.Executed, 2; got != want {
 		t.Fatalf("summary.Executed = %d, want %d", got, want)
 	}
-	if got, want := summary.Requests, 1; got != want {
+	if got, want := summary.Requests, 2; got != want {
 		t.Fatalf("summary.Requests = %d, want %d", got, want)
 	}
-	if got, want := len(summary.ExecutionDetails), 1; got != want {
+	if got, want := len(summary.ExecutionDetails), 2; got != want {
 		t.Fatalf("len(summary.ExecutionDetails) = %d, want %d", got, want)
 	}
-	if got, want := summary.ExecutionDetails[0].StatusCode, http.StatusFound; got != want {
-		t.Fatalf("summary.ExecutionDetails[0].StatusCode = %d, want %d", got, want)
+	if got, want := summary.ExecutionDetails[1].StatusCode, http.StatusFound; got != want {
+		t.Fatalf("summary.ExecutionDetails[1].StatusCode = %d, want %d", got, want)
 	}
-	if summary.ExecutionDetails[0].Error != "" {
-		t.Fatalf("summary.ExecutionDetails[0].Error = %q, want empty", summary.ExecutionDetails[0].Error)
+	if summary.ExecutionDetails[1].Error != "" {
+		t.Fatalf("summary.ExecutionDetails[1].Error = %q, want empty", summary.ExecutionDetails[1].Error)
 	}
 	if got, want := summary.Matched, 1; got != want {
 		t.Fatalf("summary.Matched = %d, want %d", got, want)
 	}
-	if got, want := len(summary.ExecutionDetails[0].Matches), 1; got != want {
+	if got, want := summary.ExecutionDetails[0].Request, "baseline-control"; got != want {
+		t.Fatalf("summary.ExecutionDetails[0].Request = %q, want %q", got, want)
+	}
+	if got, want := len(summary.ExecutionDetails[0].Matches), 0; got != want {
 		t.Fatalf("len(summary.ExecutionDetails[0].Matches) = %d, want %d", got, want)
 	}
-	if got, want := summary.ExecutionDetails[0].Matches[0].Name, "redirect-location"; got != want {
-		t.Fatalf("summary.ExecutionDetails[0].Matches[0].Name = %q, want %q", got, want)
+	if got, want := len(summary.ExecutionDetails[1].Matches), 1; got != want {
+		t.Fatalf("len(summary.ExecutionDetails[1].Matches) = %d, want %d", got, want)
 	}
-	if got, want := summary.ExecutionDetails[0].Request, "absolute-external:redirect"; got != want {
-		t.Fatalf("summary.ExecutionDetails[0].Request = %q, want %q", got, want)
+	if got, want := summary.ExecutionDetails[1].Matches[0].Name, "redirect-location"; got != want {
+		t.Fatalf("summary.ExecutionDetails[1].Matches[0].Name = %q, want %q", got, want)
+	}
+	if got, want := summary.ExecutionDetails[1].Request, "absolute-external:redirect"; got != want {
+		t.Fatalf("summary.ExecutionDetails[1].Request = %q, want %q", got, want)
 	}
 }
 

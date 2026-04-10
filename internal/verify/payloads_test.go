@@ -18,11 +18,14 @@ func TestExpandCandidateRequestsOpenRedirect(t *testing.T) {
 	if got, want := len(requests), 3; got != want {
 		t.Fatalf("len(requests) = %d, want %d", got, want)
 	}
-	if got, want := requests[0].Label, "absolute-external:redirect"; got != want {
+	if got, want := requests[0].Label, openRedirectControlLabel; got != want {
 		t.Fatalf("requests[0].Label = %q, want %q", got, want)
 	}
-	if got, want := requests[0].Path, "/login?redirect=https%3A%2F%2Fverify.invalid%2Fflan"; got != want {
-		t.Fatalf("requests[0].Path = %q, want %q", got, want)
+	if got, want := requests[1].Label, "absolute-external:redirect"; got != want {
+		t.Fatalf("requests[1].Label = %q, want %q", got, want)
+	}
+	if got, want := requests[1].Path, "/login?redirect=https%3A%2F%2Fverify.invalid%2Fflan"; got != want {
+		t.Fatalf("requests[1].Path = %q, want %q", got, want)
 	}
 }
 
@@ -35,14 +38,76 @@ func TestExpandCandidateRequestsPreservesPreEncodedPayloads(t *testing.T) {
 			MethodHints: []string{"GET"},
 		},
 	}, PayloadConfig{
-		MaxPayloadsPerCandidate: 3,
+		MaxPayloadsPerCandidate: 4,
 	})
 
-	if got, want := requests[2].Label, "encoded-external:redirect"; got != want {
-		t.Fatalf("requests[2].Label = %q, want %q", got, want)
+	if got, want := requests[3].Label, "encoded-external:redirect"; got != want {
+		t.Fatalf("requests[3].Label = %q, want %q", got, want)
 	}
-	if got, want := requests[2].Path, "/login?Redirect=https:%2f%2fverify.invalid%2fflan"; got != want {
-		t.Fatalf("requests[2].Path = %q, want %q", got, want)
+	if got, want := requests[3].Path, "/login?Redirect=https%3a%2f%2fverify.invalid%2fflan"; got != want {
+		t.Fatalf("requests[3].Path = %q, want %q", got, want)
+	}
+}
+
+func TestExpandCandidateRequestsOpenRedirectInfersParamsFromPathAnchor(t *testing.T) {
+	requests := ExpandCandidateRequests(CandidateCheck{
+		Family: "open-redirect",
+		Surface: &Surface{
+			Path:        "/logout",
+			MethodHints: []string{"GET"},
+		},
+	}, PayloadConfig{
+		MaxPayloadsPerCandidate: 1,
+	})
+
+	if got, want := len(requests), 1; got != want {
+		t.Fatalf("len(requests) = %d, want %d", got, want)
+	}
+	if got, want := requests[0].Label, "absolute-external:redirect"; got != want {
+		t.Fatalf("requests[0].Label = %q, want %q", got, want)
+	}
+	if got, want := requests[0].Path, "/logout?redirect=https%3A%2F%2Fverify.invalid%2Fflan"; got != want {
+		t.Fatalf("requests[0].Path = %q, want %q", got, want)
+	}
+}
+
+func TestExpandCandidateRequestsHonorsTotalOpenRedirectBudget(t *testing.T) {
+	requests := ExpandCandidateRequests(CandidateCheck{
+		Family: "open-redirect",
+		Surface: &Surface{
+			Path:        "/login?redirect=/",
+			Params:      []string{"redirect"},
+			MethodHints: []string{"GET"},
+		},
+	}, PayloadConfig{
+		MaxPayloadsPerCandidate: 1,
+	})
+
+	if got, want := len(requests), 1; got != want {
+		t.Fatalf("len(requests) = %d, want %d", got, want)
+	}
+	if got, want := requests[0].Label, "absolute-external:redirect"; got != want {
+		t.Fatalf("requests[0].Label = %q, want %q", got, want)
+	}
+}
+
+func TestOpenRedirectPayloadsFollowConfiguredExternalTarget(t *testing.T) {
+	payloads := openRedirectPayloads(PayloadConfig{
+		MaxPayloadsPerCandidate: 4,
+		ExternalRedirectTarget:  "https://redir.example/out",
+	})
+
+	if got, want := payloads[0].value, "https://redir.example/out"; got != want {
+		t.Fatalf("payloads[0].value = %q, want %q", got, want)
+	}
+	if got, want := payloads[1].value, "//redir.example/out"; got != want {
+		t.Fatalf("payloads[1].value = %q, want %q", got, want)
+	}
+	if got, want := payloads[2].value, "https%3a%2f%2fredir.example%2fout"; got != want {
+		t.Fatalf("payloads[2].value = %q, want %q", got, want)
+	}
+	if got, want := payloads[3].value, "/\\redir.example/out"; got != want {
+		t.Fatalf("payloads[3].value = %q, want %q", got, want)
 	}
 }
 

@@ -29,6 +29,8 @@ type verifySummary struct {
 	Executed         int                      `json:"executed,omitempty"`
 	Failures         int                      `json:"failures,omitempty"`
 	Matched          int                      `json:"matched,omitempty"`
+	Findings         int                      `json:"findings,omitempty"`
+	FindingDetails   []verifyFindingSummary   `json:"finding_details,omitempty"`
 	ExecutionDetails []verifyExecutionSummary `json:"execution_details,omitempty"`
 }
 
@@ -57,6 +59,24 @@ type verifyExecutionSummary struct {
 	Detail     string               `json:"detail,omitempty"`
 	Reasons    []string             `json:"reasons,omitempty"`
 	Matches    []verifyMatchSummary `json:"matches,omitempty"`
+}
+
+type verifyFindingSummary struct {
+	ID          string   `json:"id"`
+	CheckID     string   `json:"check_id"`
+	Family      string   `json:"family"`
+	Adapter     string   `json:"adapter,omitempty"`
+	Severity    string   `json:"severity,omitempty"`
+	Confidence  string   `json:"confidence,omitempty"`
+	Host        string   `json:"host"`
+	Port        int      `json:"port"`
+	Path        string   `json:"path,omitempty"`
+	Matcher     string   `json:"matcher,omitempty"`
+	Detail      string   `json:"detail,omitempty"`
+	Curl        string   `json:"curl,omitempty"`
+	Reasons     []string `json:"reasons,omitempty"`
+	References  []string `json:"references,omitempty"`
+	Remediation string   `json:"remediation,omitempty"`
 }
 
 type verifyMatchSummary struct {
@@ -89,6 +109,7 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 	maxBodyBytesFlag := fs.Int64("max-body-bytes", 8192, "")
 	maxRedirectsFlag := fs.Int("max-redirects", 0, "")
 	verifyTLSFlag := fs.Bool("tls-verify", false, "")
+	debugExecutionsFlag := fs.Bool("debug-executions", false, "")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "Usage:")
 		fmt.Fprintln(stderr, "  flan verify [flags]")
@@ -103,6 +124,7 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(w, "  --max-body-bytes int\tmaximum response body bytes to capture per execution\n")
 		fmt.Fprintf(w, "  --max-redirects int\tmaximum redirects to follow when executing candidates (0 = do not follow)\n")
 		fmt.Fprintf(w, "  --tls-verify\tverify TLS certificates when executing HTTPS candidates\n")
+		fmt.Fprintf(w, "  --debug-executions\tinclude raw execution details alongside findings output\n")
 		_ = w.Flush()
 		fmt.Fprintln(stderr)
 		fmt.Fprintln(stderr, "Examples:")
@@ -180,32 +202,60 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 					summary.Failures++
 				}
 				summary.Matched += len(execution.Evidence.Matches)
-				detail := verifyExecutionSummary{
-					CheckID:    execution.Candidate.CheckID,
-					Family:     execution.Candidate.Family,
-					Adapter:    execution.Candidate.Adapter,
-					Host:       execution.Candidate.Asset.Host,
-					Port:       execution.Candidate.Asset.Port,
-					Request:    execution.Request.Label,
-					Executed:   execution.Executed,
-					DurationMS: execution.DurationMS,
-					Error:      execution.Error,
-					Reasons:    execution.Candidate.Reasons,
+			}
+			findings := verifymodel.BuildFindings(executions)
+			summary.Findings += len(findings)
+			for _, finding := range findings {
+				detail := verifyFindingSummary{
+					ID:          finding.ID,
+					CheckID:     finding.CheckID,
+					Family:      finding.Family,
+					Adapter:     finding.Adapter,
+					Severity:    finding.Severity,
+					Confidence:  finding.Confidence,
+					Host:        finding.Asset.Host,
+					Port:        finding.Asset.Port,
+					Reasons:     finding.Reasons,
+					References:  finding.References,
+					Remediation: finding.Remediation,
+					Matcher:     finding.Evidence.Matcher,
+					Detail:      finding.Evidence.Detail,
+					Curl:        finding.Evidence.Curl,
 				}
-				if execution.Candidate.Surface != nil {
-					detail.Path = execution.Candidate.Surface.Path
+				if finding.Surface != nil {
+					detail.Path = finding.Surface.Path
 				}
-				if execution.Evidence.Response != nil {
-					detail.StatusCode = execution.Evidence.Response.StatusCode
+				summary.FindingDetails = append(summary.FindingDetails, detail)
+			}
+			if *debugExecutionsFlag {
+				for _, execution := range executions {
+					detail := verifyExecutionSummary{
+						CheckID:    execution.Candidate.CheckID,
+						Family:     execution.Candidate.Family,
+						Adapter:    execution.Candidate.Adapter,
+						Host:       execution.Candidate.Asset.Host,
+						Port:       execution.Candidate.Asset.Port,
+						Request:    execution.Request.Label,
+						Executed:   execution.Executed,
+						DurationMS: execution.DurationMS,
+						Error:      execution.Error,
+						Reasons:    execution.Candidate.Reasons,
+					}
+					if execution.Candidate.Surface != nil {
+						detail.Path = execution.Candidate.Surface.Path
+					}
+					if execution.Evidence.Response != nil {
+						detail.StatusCode = execution.Evidence.Response.StatusCode
+					}
+					detail.Detail = execution.Evidence.Detail
+					for _, match := range execution.Evidence.Matches {
+						detail.Matches = append(detail.Matches, verifyMatchSummary{
+							Name:   match.Name,
+							Detail: match.Detail,
+						})
+					}
+					summary.ExecutionDetails = append(summary.ExecutionDetails, detail)
 				}
-				detail.Detail = execution.Evidence.Detail
-				for _, match := range execution.Evidence.Matches {
-					detail.Matches = append(detail.Matches, verifyMatchSummary{
-						Name:   match.Name,
-						Detail: match.Detail,
-					})
-				}
-				summary.ExecutionDetails = append(summary.ExecutionDetails, detail)
 			}
 		}
 	}
@@ -234,31 +284,53 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stdout, "Requests: %d\n", summary.Requests)
 		fmt.Fprintf(stdout, "Executed: %d\n", summary.Executed)
 		fmt.Fprintf(stdout, "Failures: %d\n", summary.Failures)
-		fmt.Fprintf(stdout, "Matched: %d\n", summary.Matched)
-		for _, execution := range summary.ExecutionDetails {
-			line := fmt.Sprintf("- %s (%s) %s:%d", execution.CheckID, execution.Family, execution.Host, execution.Port)
-			if execution.Path != "" {
-				line += execution.Path
+		fmt.Fprintf(stdout, "Findings: %d\n", summary.Findings)
+		for _, finding := range summary.FindingDetails {
+			line := fmt.Sprintf("- %s (%s) %s:%d", finding.CheckID, finding.Family, finding.Host, finding.Port)
+			if finding.Path != "" {
+				line += finding.Path
 			}
-			if execution.Executed && execution.StatusCode > 0 {
-				line += fmt.Sprintf(" status=%d", execution.StatusCode)
-			}
-			if execution.Error != "" {
-				line += " error=" + execution.Error
+			if finding.Severity != "" || finding.Confidence != "" {
+				line += fmt.Sprintf(" severity=%s confidence=%s", finding.Severity, finding.Confidence)
 			}
 			fmt.Fprintln(stdout, line)
-			if execution.Detail != "" {
-				fmt.Fprintf(stdout, "  detail: %s\n", execution.Detail)
+			if finding.Detail != "" {
+				fmt.Fprintf(stdout, "  detail: %s\n", finding.Detail)
 			}
-			if execution.Request != "" {
-				fmt.Fprintf(stdout, "  request: %s\n", execution.Request)
+			if finding.Matcher != "" {
+				fmt.Fprintf(stdout, "  matcher: %s\n", finding.Matcher)
 			}
-			for _, match := range execution.Matches {
-				fmt.Fprintf(stdout, "  match: %s", match.Name)
-				if match.Detail != "" {
-					fmt.Fprintf(stdout, " - %s", match.Detail)
+			if finding.Remediation != "" {
+				fmt.Fprintf(stdout, "  remediation: %s\n", finding.Remediation)
+			}
+		}
+		if *debugExecutionsFlag {
+			fmt.Fprintln(stdout, "Execution details:")
+			for _, execution := range summary.ExecutionDetails {
+				line := fmt.Sprintf("- %s (%s) %s:%d", execution.CheckID, execution.Family, execution.Host, execution.Port)
+				if execution.Path != "" {
+					line += execution.Path
 				}
-				fmt.Fprintln(stdout)
+				if execution.Executed && execution.StatusCode > 0 {
+					line += fmt.Sprintf(" status=%d", execution.StatusCode)
+				}
+				if execution.Error != "" {
+					line += " error=" + execution.Error
+				}
+				fmt.Fprintln(stdout, line)
+				if execution.Detail != "" {
+					fmt.Fprintf(stdout, "  detail: %s\n", execution.Detail)
+				}
+				if execution.Request != "" {
+					fmt.Fprintf(stdout, "  request: %s\n", execution.Request)
+				}
+				for _, match := range execution.Matches {
+					fmt.Fprintf(stdout, "  match: %s", match.Name)
+					if match.Detail != "" {
+						fmt.Fprintf(stdout, " - %s", match.Detail)
+					}
+					fmt.Fprintln(stdout)
+				}
 			}
 		}
 	}
