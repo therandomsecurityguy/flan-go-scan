@@ -85,12 +85,14 @@ func ExecuteCandidateChecks(ctx context.Context, candidates []CandidateCheck, cf
 					Error:     ctx.Err().Error(),
 				}
 			}
+			postprocessExecutionResults(results)
 			return results
 		case jobs <- job{index: i, candidate: jobItem.candidate, request: jobItem.request}:
 		}
 	}
 	close(jobs)
 	wg.Wait()
+	postprocessExecutionResults(results)
 	return results
 }
 
@@ -326,7 +328,7 @@ func evaluateExecution(candidate CandidateCheck, request GeneratedRequest, evide
 	}
 	switch candidate.Family {
 	case "open-redirect":
-		return evaluateOpenRedirectMatch(request, evidence.Response)
+		return nil
 	case "unauth-api":
 		return evaluateUnauthAPIMatch(candidate, evidence.Response)
 	default:
@@ -334,12 +336,22 @@ func evaluateExecution(candidate CandidateCheck, request GeneratedRequest, evide
 	}
 }
 
-func evaluateOpenRedirectMatch(request GeneratedRequest, response *HTTPResponseEvidence) []MatchResult {
+func evaluateOpenRedirectMatch(request GeneratedRequest, response *HTTPResponseEvidence, baselineLocation string) []MatchResult {
+	if request.Label == openRedirectControlLabel {
+		return nil
+	}
 	location := firstHeaderValue(response.Headers, "Location")
 	if response.StatusCode >= 300 && response.StatusCode < 400 && isExternalRedirectMatch(location, request.Path) {
+		if sameLocation(location, baselineLocation) {
+			return nil
+		}
+		detail := "redirect status and Location header observed: " + location
+		if strings.TrimSpace(baselineLocation) != "" {
+			detail += " (differs from baseline)"
+		}
 		return []MatchResult{{
 			Name:   "redirect-location",
-			Detail: "redirect status and Location header observed: " + location,
+			Detail: detail,
 		}}
 	}
 	return nil
@@ -370,11 +382,17 @@ func isExternalRedirectMatch(location, requestPath string) bool {
 	if location == "" {
 		return false
 	}
-	if value, ok := queryParamValue(requestPath, redirectParams); ok && strings.EqualFold(strings.TrimSpace(value), location) {
+	value, ok := queryParamValue(requestPath, redirectParams)
+	if !ok {
+		return false
+	}
+	value = strings.TrimSpace(value)
+	if strings.EqualFold(value, location) {
 		return true
 	}
-	locationLower := strings.ToLower(location)
-	return strings.Contains(locationLower, "verify.invalid")
+	wantHost := redirectHost(value)
+	gotHost := redirectHost(location)
+	return wantHost != "" && gotHost != "" && strings.EqualFold(wantHost, gotHost)
 }
 
 func isVerifiedUnauthAPIResponse(candidate CandidateCheck, response *HTTPResponseEvidence) bool {
@@ -417,6 +435,72 @@ func queryParamValue(rawPath string, params map[string]struct{}) (string, bool) 
 		return values[0], true
 	}
 	return "", false
+}
+
+func postprocessExecutionResults(results []ExecutionResult) {
+	grouped := make(map[string][]int)
+	for i, result := range results {
+		if result.Candidate.Family != "open-redirect" {
+			continue
+		}
+		grouped[candidateKey(result.Candidate)] = append(grouped[candidateKey(result.Candidate)], i)
+	}
+	for _, indexes := range grouped {
+		baselineLocation := ""
+		for _, index := range indexes {
+			result := &results[index]
+			if result.Request.Label != openRedirectControlLabel || result.Evidence.Response == nil {
+				continue
+			}
+			baselineLocation = firstHeaderValue(result.Evidence.Response.Headers, "Location")
+			result.Evidence.Matches = nil
+			result.Evidence.Matcher = ""
+		}
+		for _, index := range indexes {
+			result := &results[index]
+			if result.Evidence.Response == nil {
+				continue
+			}
+			result.Evidence.Matches = evaluateOpenRedirectMatch(result.Request, result.Evidence.Response, baselineLocation)
+			result.Evidence.Matcher = ""
+			if len(result.Evidence.Matches) > 0 {
+				result.Evidence.Matcher = result.Evidence.Matches[0].Name
+			}
+		}
+	}
+}
+
+func sameLocation(left, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if left == "" || right == "" {
+		return false
+	}
+	return strings.EqualFold(left, right)
+}
+
+func redirectHost(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	candidates := []string{value}
+	if strings.HasPrefix(value, "//") {
+		candidates = append(candidates, "https:"+value)
+	}
+	if strings.HasPrefix(value, "/\\") {
+		candidates = append(candidates, "https://"+strings.TrimPrefix(value, "/\\"))
+	}
+	for _, candidate := range candidates {
+		parsed, err := url.Parse(candidate)
+		if err != nil {
+			continue
+		}
+		if host := strings.TrimSpace(parsed.Host); host != "" {
+			return host
+		}
+	}
+	return ""
 }
 
 func firstHeaderValue(headers map[string][]string, key string) string {
