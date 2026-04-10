@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -49,6 +50,7 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 	inputPath := fs.String("input", "", "")
 	inputShort := fs.String("i", "", "")
 	jsonFlag := fs.Bool("json", false, "")
+	runFlag := fs.Bool("run", false, "")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "Usage:")
 		fmt.Fprintln(stderr, "  flan verify [flags]")
@@ -56,10 +58,12 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 		w := tabwriter.NewWriter(stderr, 0, 0, 2, ' ', 0)
 		fmt.Fprintf(w, "  --input, -i string\tpath to scan results in JSON or JSONL format; use - for stdin\n")
 		fmt.Fprintf(w, "  --json\toutput surface summary as JSON\n")
+		fmt.Fprintf(w, "  --run\trun nuclei against derived HTTP targets (requires nuclei on PATH)\n")
 		_ = w.Flush()
 		fmt.Fprintln(stderr)
 		fmt.Fprintln(stderr, "Examples:")
 		fmt.Fprintln(stderr, "  flan verify --input reports/scan-20260406-120000.json")
+		fmt.Fprintln(stderr, "  flan verify --input reports/scan-20260406-120000.json --run")
 		fmt.Fprintln(stderr, "  flan --jsonl -t scanme.nmap.org | flan verify --input -")
 	}
 	if err := fs.Parse(args); err != nil {
@@ -88,10 +92,17 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if *jsonFlag && *runFlag {
+		return errors.New("--json cannot be combined with --run")
+	}
 
 	summary := verifySummary{
 		InputPath: path,
 		Results:   len(results),
+	}
+	if *runFlag {
+		targets := verifymodel.NucleiTargetsFromScanResults(results)
+		return verifymodel.RunNuclei(context.Background(), stdout, stderr, targets)
 	}
 	if *jsonFlag {
 		for _, result := range results {
