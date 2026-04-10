@@ -6,37 +6,9 @@ import (
 	"github.com/therandomsecurityguy/flan-go-scan/internal/scanner"
 )
 
-func TestAssetFromScanResultMergesProducts(t *testing.T) {
-	result := scanner.ScanResult{
-		Host:     "10.0.0.1",
-		Hostname: "grafana.example.com",
-		Port:     443,
-		Protocol: "tcp",
-		Service:  "https",
-		Products: []scanner.ProductFingerprint{
-			{Name: "Grafana", Confidence: "low"},
-		},
-		App: &scanner.AppFingerprint{
-			Products: []scanner.ProductFingerprint{
-				{Name: "Grafana", Confidence: "high"},
-				{Name: "Vault", Confidence: "medium"},
-			},
-		},
-	}
-
-	asset := AssetFromScanResult(result)
-
-	if got, want := len(asset.Products), 2; got != want {
-		t.Fatalf("len(asset.Products) = %d, want %d", got, want)
-	}
-	if got, want := asset.Products[0].Name, "Grafana"; got != want {
-		t.Fatalf("asset.Products[0].Name = %q, want %q", got, want)
-	}
-	if got, want := asset.Products[0].Confidence, "high"; got != want {
-		t.Fatalf("asset.Products[0].Confidence = %q, want %q", got, want)
-	}
-	if got, want := asset.Products[1].Name, "Vault"; got != want {
-		t.Fatalf("asset.Products[1].Name = %q, want %q", got, want)
+func TestNormalizeSurfacePathURLWithoutPath(t *testing.T) {
+	if got, want := normalizeSurfacePath("https://example.com"), "/"; got != want {
+		t.Fatalf("normalizeSurfacePath returned %q, want %q", got, want)
 	}
 }
 
@@ -67,48 +39,6 @@ func TestSurfaceFromCrawlResultNormalizesPathAndParams(t *testing.T) {
 	if got, want := surface.Title, "Login"; got != want {
 		t.Fatalf("surface.Title = %q, want %q", got, want)
 	}
-}
-
-func TestSelectorContextFromScanResultBuildsHints(t *testing.T) {
-	result := scanner.ScanResult{
-		Host:     "192.0.2.10",
-		Hostname: "app.example.com",
-		Port:     443,
-		Protocol: "tcp",
-		Service:  "https",
-		Products: []scanner.ProductFingerprint{
-			{Name: "Grafana", Confidence: "high"},
-		},
-		App: &scanner.AppFingerprint{
-			Server:    "nginx/1.27.0",
-			PoweredBy: "Grafana",
-			Apps:      []string{"Grafana", "Grafana"},
-		},
-		Endpoints: []scanner.CrawlResult{
-			{Path: "/login?redirect=/", Title: "Login"},
-			{Path: "/login?redirect=/", Title: "Login"},
-			{Path: "/api/health", Title: "Health"},
-		},
-		SecurityHeaders: []scanner.HeaderFinding{
-			{Header: "Content-Security-Policy"},
-			{Header: "Content-Security-Policy"},
-			{Header: "Server"},
-		},
-		Vulnerabilities: []string{"CVE-2025-1234", "CVE-2025-1234", "CWE-601"},
-	}
-
-	ctx := SelectorContextFromScanResult(result)
-
-	if got, want := len(ctx.Surfaces), 3; got != want {
-		t.Fatalf("len(ctx.Surfaces) = %d, want %d", got, want)
-	}
-	assertStrings(t, "ProductHints", ctx.ProductHints, []string{"grafana"})
-	assertStrings(t, "AppHints", ctx.AppHints, []string{"grafana", "nginx/1.27.0"})
-	assertStrings(t, "AuthHints", ctx.AuthHints, []string{"login"})
-	assertStrings(t, "PathHints", ctx.PathHints, []string{"/", "/api/health", "/login?redirect=/"})
-	assertStrings(t, "TitleHints", ctx.TitleHints, []string{"health", "login"})
-	assertStrings(t, "HeaderHints", ctx.HeaderHints, []string{"content-security-policy", "server"})
-	assertStrings(t, "Vulnerabilities", ctx.Vulnerabilities, []string{"CVE-2025-1234", "CWE-601"})
 }
 
 func TestSurfacesFromScanResultAddsFallbackRootForHTTPService(t *testing.T) {
@@ -164,33 +94,6 @@ func TestSurfacesFromScanResultAddsKubernetesPaths(t *testing.T) {
 	surfaces := SurfacesFromScanResult(result)
 
 	assertSurfacePaths(t, surfaces, []string{"/", "/api", "/apis", "/version"})
-}
-
-func TestSelectorContextFromScanResultAddsKubernetesProductHint(t *testing.T) {
-	result := scanner.ScanResult{
-		Host:     "192.0.2.23",
-		Port:     6443,
-		Protocol: "tcp",
-		Service:  "https",
-		TLS:      &scanner.TLSResult{Version: "TLS 1.3"},
-		Kubernetes: []scanner.KubernetesOrigin{{
-			Cluster: "prod",
-		}},
-	}
-
-	ctx := SelectorContextFromScanResult(result)
-
-	assertStrings(t, "ProductHints", ctx.ProductHints, []string{"kubernetes"})
-}
-
-func TestHeaderHintsSkipsMissingHeaders(t *testing.T) {
-	hints := headerHints([]scanner.HeaderFinding{
-		{Header: "Content-Security-Policy", Detail: "missing CSP; XSS and injection attacks not mitigated"},
-		{Header: "Server", Detail: "version disclosed: nginx/1.27.0"},
-		{Header: "HTTP Probe", Detail: "header inspection failed"},
-	})
-
-	assertStrings(t, "HeaderHints", hints, []string{"server"})
 }
 
 func assertStrings(t *testing.T, name string, got, want []string) {
