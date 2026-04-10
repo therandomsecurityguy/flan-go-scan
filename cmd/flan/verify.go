@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"text/tabwriter"
 
 	"github.com/therandomsecurityguy/flan-go-scan/internal/output"
@@ -51,6 +52,10 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 	inputShort := fs.String("i", "", "")
 	jsonFlag := fs.Bool("json", false, "")
 	runFlag := fs.Bool("run", false, "")
+	templatesFlag := fs.String("templates", "", "")
+	templateURLFlag := fs.String("template-url", "", "")
+	workflowsFlag := fs.String("workflows", "", "")
+	workflowURLFlag := fs.String("workflow-url", "", "")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "Usage:")
 		fmt.Fprintln(stderr, "  flan verify [flags]")
@@ -59,6 +64,10 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(w, "  --input, -i string\tpath to scan results in JSON or JSONL format; use - for stdin\n")
 		fmt.Fprintf(w, "  --json\toutput surface summary as JSON\n")
 		fmt.Fprintf(w, "  --run\trun nuclei against derived HTTP targets (requires nuclei on PATH)\n")
+		fmt.Fprintf(w, "  --templates string\tcomma-separated nuclei template files or directories\n")
+		fmt.Fprintf(w, "  --template-url string\tcomma-separated remote nuclei template URLs\n")
+		fmt.Fprintf(w, "  --workflows string\tcomma-separated nuclei workflow files or directories\n")
+		fmt.Fprintf(w, "  --workflow-url string\tcomma-separated remote nuclei workflow URLs\n")
 		_ = w.Flush()
 		fmt.Fprintln(stderr)
 		fmt.Fprintln(stderr, "Examples:")
@@ -102,7 +111,17 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 	}
 	if *runFlag {
 		targets := verifymodel.NucleiTargetsFromScanResults(results)
-		return verifymodel.RunNuclei(context.Background(), stdout, stderr, targets)
+		bundle, err := verifymodel.RunNuclei(context.Background(), stdout, stderr, verifymodel.NucleiRunOptions{
+			ArtifactRoot: filepath.Join("artifacts", "verify"),
+			Templates:    splitCSV(*templatesFlag),
+			TemplateURLs: splitCSV(*templateURLFlag),
+			Workflows:    splitCSV(*workflowsFlag),
+			WorkflowURLs: splitCSV(*workflowURLFlag),
+		}, targets)
+		if bundle != nil {
+			fmt.Fprintf(stderr, "nuclei run bundle: %s\n", bundle.Directory)
+		}
+		return err
 	}
 	if *jsonFlag {
 		for _, result := range results {
