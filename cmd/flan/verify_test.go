@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -91,6 +92,89 @@ func TestRunVerifyCommandPlainSummaryIncludesSurfaceDetails(t *testing.T) {
 	}
 	if !strings.Contains(got, "1.1.1.1:80/ source=service service=http") {
 		t.Fatalf("expected inferred service surface in output, got %q", got)
+	}
+}
+
+func TestRunVerifyCommandRunPassesTemplateSourcesToNuclei(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-based fake nuclei binary requires unix-like shell")
+	}
+
+	path := writeVerifyInput(t, `[{"host":"1.1.1.1","port":80,"protocol":"tcp","service":"http","endpoints":[{"path":"/login","status_code":200}]}]`)
+	binDir := t.TempDir()
+	argsPath := filepath.Join(binDir, "args.txt")
+	nucleiPath := filepath.Join(binDir, "nuclei")
+	script := `#!/bin/sh
+set -eu
+printf '%s
+' "$@" > "$NUCLEI_ARGS_PATH"
+jsonl=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -jle)
+      jsonl="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+: > "$jsonl"
+`
+	if err := os.WriteFile(nucleiPath, []byte(script), 0700); err != nil {
+		t.Fatalf("write fake nuclei: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+oldPath)
+	t.Setenv("NUCLEI_ARGS_PATH", argsPath)
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	tempWorkDir := t.TempDir()
+	if err := os.Chdir(tempWorkDir); err != nil {
+		t.Fatalf("chdir temp work dir: %v", err)
+	}
+	defer os.Chdir(wd)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err = runVerifyCommand([]string{
+		"--input", path,
+		"--run",
+		"--templates", "http/exposures,custom/login.yaml",
+		"--template-url", "https://templates.example.com/exposure.yaml",
+		"--workflows", "workflows/external",
+		"--workflow-url", "https://templates.example.com/workflow.yaml",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("runVerifyCommand returned error: %v", err)
+	}
+
+	argsBytes, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("read captured args: %v", err)
+	}
+	gotArgs := string(argsBytes)
+	for _, expected := range []string{
+		"-t",
+		"http/exposures,custom/login.yaml",
+		"-turl",
+		"https://templates.example.com/exposure.yaml",
+		"-w",
+		"workflows/external",
+		"-wurl",
+		"https://templates.example.com/workflow.yaml",
+	} {
+		if !strings.Contains(gotArgs, expected) {
+			t.Fatalf("expected %q in nuclei args, got %q", expected, gotArgs)
+		}
+	}
+	if !strings.Contains(stderr.String(), "nuclei run bundle:") {
+		t.Fatalf("expected run bundle path in stderr, got %q", stderr.String())
 	}
 }
 
