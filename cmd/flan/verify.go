@@ -56,6 +56,10 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 	templateURLFlag := fs.String("template-url", "", "")
 	workflowsFlag := fs.String("workflows", "", "")
 	workflowURLFlag := fs.String("workflow-url", "", "")
+	tagsFlag := fs.String("tags", "", "")
+	severityFlag := fs.String("severity", "", "")
+	rateLimitFlag := fs.Int("rate-limit", 0, "")
+	timeoutFlag := fs.Int("timeout", 0, "")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "Usage:")
 		fmt.Fprintln(stderr, "  flan verify [flags]")
@@ -68,6 +72,10 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(w, "  --template-url string\tcomma-separated remote nuclei template URLs\n")
 		fmt.Fprintf(w, "  --workflows string\tcomma-separated nuclei workflow files or directories\n")
 		fmt.Fprintf(w, "  --workflow-url string\tcomma-separated remote nuclei workflow URLs\n")
+		fmt.Fprintf(w, "  --tags string\tcomma-separated nuclei tags\n")
+		fmt.Fprintf(w, "  --severity string\tcomma-separated nuclei severities\n")
+		fmt.Fprintf(w, "  --rate-limit int\tnuclei requests per second\n")
+		fmt.Fprintf(w, "  --timeout int\tnuclei per-request timeout in seconds\n")
 		_ = w.Flush()
 		fmt.Fprintln(stderr)
 		fmt.Fprintln(stderr, "Examples:")
@@ -111,14 +119,21 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 	}
 	if *runFlag {
 		targets := verifymodel.NucleiTargetsFromScanResults(results)
-		bundle, err := verifymodel.RunNuclei(context.Background(), stdout, stderr, verifymodel.NucleiRunOptions{
+		bundles, err := verifymodel.RunNuclei(context.Background(), stdout, stderr, verifymodel.NucleiRunOptions{
 			ArtifactRoot: filepath.Join("artifacts", "verify"),
 			Templates:    splitCSV(*templatesFlag),
 			TemplateURLs: splitCSV(*templateURLFlag),
 			Workflows:    splitCSV(*workflowsFlag),
 			WorkflowURLs: splitCSV(*workflowURLFlag),
+			Tags:         splitCSV(*tagsFlag),
+			Severity:     splitCSV(*severityFlag),
+			RateLimit:    *rateLimitFlag,
+			Timeout:      *timeoutFlag,
 		}, targets)
-		if bundle != nil {
+		for _, bundle := range bundles {
+			if bundle == nil {
+				continue
+			}
 			fmt.Fprintf(stderr, "nuclei run bundle: %s\n", bundle.Directory)
 		}
 		return err
