@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -16,11 +17,12 @@ import (
 )
 
 type CrawlResult struct {
-	Path        string `json:"path"`
-	StatusCode  int    `json:"status_code"`
-	ContentType string `json:"content_type,omitempty"`
-	Title       string `json:"title,omitempty"`
-	RedirectTo  string `json:"redirect_to,omitempty"`
+	Path           string          `json:"path"`
+	StatusCode     int             `json:"status_code"`
+	ContentType    string          `json:"content_type,omitempty"`
+	Title          string          `json:"title,omitempty"`
+	RedirectTo     string          `json:"redirect_to,omitempty"`
+	ExternalAssets []ExternalAsset `json:"external_assets,omitempty"`
 }
 
 type AppFingerprint struct {
@@ -229,6 +231,8 @@ var productProbePaths = []string{
 	"/app/rest/server",
 	"/ui/",
 }
+
+var sourceMapPattern = regexp.MustCompile(`(?m)sourceMappingURL=([^\s*]+)`)
 
 func Crawl(ctx context.Context, scheme, ip, hostname string, port int, maxDepth int, timeout time.Duration, reqDelay time.Duration, verifyTLS bool) ([]CrawlResult, *AppFingerprint) {
 	return crawlHTTP(ctx, scheme, ip, hostname, port, maxDepth, timeout, reqDelay, verifyTLS, true)
@@ -468,11 +472,13 @@ func fetchPath(ctx context.Context, client *http.Client, base, hostname, path st
 		return cr, ""
 	}
 	body := string(b)
+	requestURL := base + path
 
 	if strings.Contains(cr.ContentType, "text/html") {
 		cr.Title = extractTitle(body)
 	}
 	detectDeeperProduct(path, cr, resp.Header, body, fp, productsFound)
+	cr.ExternalAssets = dedupeExternalAssets(append(cr.ExternalAssets, inspectExternalAssets(ctx, client, requestURL, path, cr.ContentType, body)...))
 
 	return cr, body
 }
@@ -639,6 +645,184 @@ func extractLinks(body, base string) []string {
 	}
 
 	return links
+}
+
+func extractAssetURLs(body, base string) []string {
+	baseURL, err := url.Parse(base)
+	if err != nil {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	var assets []string
+
+	z := html.NewTokenizer(strings.NewReader(body))
+	for {
+		tt := z.Next()
+		if tt == html.ErrorToken {
+			break
+		}
+		if tt != html.StartTagToken && tt != html.SelfClosingTagToken {
+			continue
+		}
+
+		tok := z.Token()
+		var attrName string
+		switch tok.Data {
+		case "script", "img":
+			attrName = "src"
+		case "link":
+			attrName = "href"
+		default:
+			continue
+		}
+
+		for _, attr := range tok.Attr {
+			if attr.Key != attrName {
+				continue
+			}
+			raw := strings.TrimSpace(attr.Val)
+			if raw == "" || strings.HasPrefix(raw, "javascript:") || strings.HasPrefix(raw, "data:") || strings.HasPrefix(raw, "#") {
+				continue
+			}
+			u, err := url.Parse(raw)
+			if err != nil {
+				continue
+			}
+			resolved := baseURL.ResolveReference(u).String()
+			if _, ok := seen[resolved]; ok {
+				continue
+			}
+			seen[resolved] = struct{}{}
+			assets = append(assets, resolved)
+		}
+	}
+
+	return assets
+}
+
+func extractSourceMapURLs(body, assetURL string) []string {
+	matches := sourceMapPattern.FindAllStringSubmatch(body, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	baseURL, err := url.Parse(assetURL)
+	if err != nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(matches))
+	var urls []string
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		raw := strings.Trim(match[1], `"' `)
+		raw = strings.TrimSuffix(raw, "*/")
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		u, err := url.Parse(raw)
+		if err != nil {
+			continue
+		}
+		resolved := baseURL.ResolveReference(u).String()
+		if _, ok := seen[resolved]; ok {
+			continue
+		}
+		seen[resolved] = struct{}{}
+		urls = append(urls, resolved)
+	}
+	return urls
+}
+
+func inspectExternalAssets(ctx context.Context, client *http.Client, requestURL, sourcePath, contentType, body string) []ExternalAsset {
+	var assets []ExternalAsset
+
+	for _, sourcemapURL := range extractSourceMapURLs(body, requestURL) {
+		assets = append(assets, ExternalAsset{
+			URL:        sourcemapURL,
+			Kind:       "sourcemap",
+			SourceURL:  requestURL,
+			SourcePath: sourcePath,
+		})
+	}
+
+	if !strings.Contains(strings.ToLower(contentType), "text/html") {
+		return assets
+	}
+
+	const maxLinkedAssets = 4
+	linkedAssets := extractAssetURLs(body, requestURL)
+	fetchedAssets := 0
+	for _, assetURL := range linkedAssets {
+		if !looksLikeScriptOrStyleAsset(assetURL) {
+			continue
+		}
+		if fetchedAssets >= maxLinkedAssets {
+			break
+		}
+		assetBody, err := fetchExternalAssetBody(ctx, client, assetURL)
+		if err != nil || assetBody == "" {
+			continue
+		}
+		fetchedAssets++
+		for _, sourcemapURL := range extractSourceMapURLs(assetBody, assetURL) {
+			assets = append(assets, ExternalAsset{
+				URL:        sourcemapURL,
+				Kind:       "sourcemap",
+				SourceURL:  assetURL,
+				SourcePath: sourcePath,
+			})
+		}
+	}
+
+	return assets
+}
+
+func fetchExternalAssetBody(ctx context.Context, client *http.Client, assetURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, assetURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "flan-scanner/1.0")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 || !shouldReadHTTPBody(resp.Header.Get("Content-Type")) {
+		io.Copy(io.Discard, resp.Body) //nolint:errcheck
+		return "", nil
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return "", err
+	}
+	io.Copy(io.Discard, resp.Body) //nolint:errcheck
+	return string(body), nil
+}
+
+func looksLikeScriptOrStyleAsset(assetURL string) bool {
+	lower := strings.ToLower(strings.TrimSpace(assetURL))
+	return strings.Contains(lower, ".js") || strings.Contains(lower, ".css")
+}
+
+func dedupeExternalAssets(values []ExternalAsset) []ExternalAsset {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]ExternalAsset, 0, len(values))
+	for _, value := range values {
+		key := strings.Join([]string{value.Kind, value.URL, value.SourceURL, value.SourcePath}, "|")
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func sameHost(a, b *url.URL) bool {
