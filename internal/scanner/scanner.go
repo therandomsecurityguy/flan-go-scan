@@ -7,6 +7,13 @@ type ProductFingerprint struct {
 	Confidence string `json:"confidence"`
 }
 
+type ExternalAsset struct {
+	URL        string `json:"url"`
+	Kind       string `json:"kind,omitempty"`
+	SourceURL  string `json:"source_url,omitempty"`
+	SourcePath string `json:"source_path,omitempty"`
+}
+
 type KubernetesOrigin struct {
 	Cluster   string `json:"cluster,omitempty"`
 	Context   string `json:"context,omitempty"`

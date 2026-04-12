@@ -9,8 +9,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"text/tabwriter"
 
+	"github.com/therandomsecurityguy/flan-go-scan/internal/findings"
 	"github.com/therandomsecurityguy/flan-go-scan/internal/output"
 	verifymodel "github.com/therandomsecurityguy/flan-go-scan/internal/verify"
 )
@@ -21,6 +24,8 @@ type verifySummary struct {
 	InputPath      string                 `json:"input_path"`
 	Results        int                    `json:"results"`
 	Surfaces       int                    `json:"surfaces"`
+	FindingCount   int                    `json:"finding_count,omitempty"`
+	Findings       []findings.Finding     `json:"findings,omitempty"`
 	SurfaceDetails []verifySurfaceSummary `json:"surface_details,omitempty"`
 }
 
@@ -109,17 +114,30 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if *jsonFlag && *runFlag {
-		return errors.New("--json cannot be combined with --run")
-	}
 
 	summary := verifySummary{
 		InputPath: path,
 		Results:   len(results),
 	}
+	for _, result := range results {
+		surfaces := verifymodel.SurfacesFromScanResult(result)
+		summary.Surfaces += len(surfaces)
+		for _, surface := range surfaces {
+			summary.SurfaceDetails = append(summary.SurfaceDetails, verifySurfaceSummary{
+				Host:      result.Host,
+				Port:      result.Port,
+				Service:   result.Service,
+				Source:    surface.Source,
+				Path:      surface.Path,
+				AuthHints: surface.AuthHints,
+			})
+		}
+	}
+
+	allFindings := findings.FromScanResults(results)
 	if *runFlag {
 		targets := verifymodel.NucleiTargetsFromScanResults(results)
-		bundles, err := verifymodel.RunNuclei(context.Background(), stdout, stderr, verifymodel.NucleiRunOptions{
+		bundles, err := verifymodel.RunNuclei(context.Background(), nil, stderr, verifymodel.NucleiRunOptions{
 			ArtifactRoot: filepath.Join("artifacts", "verify"),
 			Templates:    splitCSV(*templatesFlag),
 			TemplateURLs: splitCSV(*templateURLFlag),
@@ -136,33 +154,42 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 			}
 			fmt.Fprintf(stderr, "nuclei run bundle: %s\n", bundle.Directory)
 		}
-		return err
-	}
-	if *jsonFlag {
-		for _, result := range results {
-			surfaces := verifymodel.SurfacesFromScanResult(result)
-			summary.Surfaces += len(surfaces)
-			for _, surface := range surfaces {
-				summary.SurfaceDetails = append(summary.SurfaceDetails, verifySurfaceSummary{
-					Host:      result.Host,
-					Port:      result.Port,
-					Service:   result.Service,
-					Source:    surface.Source,
-					Path:      surface.Path,
-					AuthHints: surface.AuthHints,
-				})
-			}
+		if err != nil {
+			return err
 		}
+		nucleiFindings, err := findings.FromNucleiBundles(bundles)
+		if err != nil {
+			return err
+		}
+		allFindings = append(allFindings, nucleiFindings...)
+	}
+	sortFindings(allFindings)
+	summary.Findings = allFindings
+	summary.FindingCount = len(allFindings)
+
+	if *jsonFlag {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(summary)
 	}
 
-	for _, result := range results {
-		summary.Surfaces += len(verifymodel.SurfacesFromScanResult(result))
-	}
 	fmt.Fprintf(stdout, "Loaded %d scan results\n", summary.Results)
 	fmt.Fprintf(stdout, "Surfaces: %d\n", summary.Surfaces)
+	fmt.Fprintf(stdout, "Findings: %d\n", summary.FindingCount)
+	for _, finding := range summary.Findings {
+		line := fmt.Sprintf("- [%s] %s", strings.ToUpper(finding.Severity), finding.Title)
+		location := finding.URL
+		if location == "" && finding.Path != "" {
+			location = fmt.Sprintf("%s:%d%s", finding.Host, finding.Port, finding.Path)
+		}
+		if location != "" {
+			line += "  " + location
+		}
+		if finding.Source != "" {
+			line += "  source=" + finding.Source
+		}
+		fmt.Fprintln(stdout, line)
+	}
 	for _, result := range results {
 		for _, surface := range verifymodel.SurfacesFromScanResult(result) {
 			line := fmt.Sprintf("- %s:%d%s", result.Host, result.Port, surface.Path)
@@ -176,6 +203,47 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 	return nil
+}
+
+func sortFindings(values []findings.Finding) {
+	slices.SortFunc(values, func(a, b findings.Finding) int {
+		if rank := compareSeverity(a.Severity, b.Severity); rank != 0 {
+			return rank
+		}
+		if rank := strings.Compare(a.Host, b.Host); rank != 0 {
+			return rank
+		}
+		if rank := strings.Compare(a.Path, b.Path); rank != 0 {
+			return rank
+		}
+		return strings.Compare(a.Title, b.Title)
+	})
+}
+
+func compareSeverity(a, b string) int {
+	order := map[string]int{
+		"critical": 0,
+		"high":     1,
+		"medium":   2,
+		"low":      3,
+		"info":     4,
+	}
+	left, ok := order[strings.ToLower(strings.TrimSpace(a))]
+	if !ok {
+		left = len(order)
+	}
+	right, ok := order[strings.ToLower(strings.TrimSpace(b))]
+	if !ok {
+		right = len(order)
+	}
+	switch {
+	case left < right:
+		return -1
+	case left > right:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func stdinHasData() bool {

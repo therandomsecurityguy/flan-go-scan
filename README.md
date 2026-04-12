@@ -37,6 +37,9 @@ Flan is a Swiss army knife network scanner in Go. Successor to [Flan Scan](https
 - Pretty streaming CLI output with TTY detection (JSONL when piping)
 - Per-run scan metadata report (`scan-metadata-*.json`) for auditability
 - JSON, JSONL (streaming), CSV, and text output
+- `flan verify` turns saved scan JSON/JSONL into operator-facing findings
+- Optional Nuclei-backed verification via `flan verify --run` with local run bundles under `artifacts/verify/`
+- Unified findings promote native signals such as `/metrics`, `/debug/pprof`, TLS trust issues, and linked sourcemap references into the same output stream as Nuclei matches
 - Domain-mode output keeps subdomain and IP context (`hostname (ip):port`)
 - Security header checks are evaluated on `2xx/3xx` HTTP responses; `4xx/5xx` responses are reported as skipped
 - Configurable via YAML
@@ -275,6 +278,30 @@ Use a custom asset context file for policy-aware AI analysis:
 flan -t api.example.com --context /path/to/context.yaml
 ```
 
+Turn saved scan output into operator-facing findings:
+
+```bash
+flan verify --input reports/scan-20260406-120000.json
+```
+
+Run Nuclei against derived HTTP surfaces and merge the results:
+
+```bash
+flan verify --input reports/scan-20260406-120000.json --run
+```
+
+Emit unified verify findings as JSON:
+
+```bash
+flan verify --input reports/scan-20260406-120000.json --run --json
+```
+
+Pipe a scan directly into `verify`:
+
+```bash
+flan -t api.example.com --crawl --jsonl | flan verify --input - --run
+```
+
 ## Runtime Behavior
 
 > [!NOTE]
@@ -297,6 +324,8 @@ dns:
 ```
 
 Use `--workers`, `--rate-limit`, and `--max-host-conns` to tune scan concurrency and make large inventory-backed runs gentler on shared targets and load-balanced services.
+
+When you run `flan verify --run`, Flan derives bounded HTTP targets from scan results, invokes the `nuclei` binary found on `PATH`, and stores per-run artifacts under `artifacts/verify/`. Each run bundle includes the target list, target map, Nuclei JSONL output, logs, and a manifest so operators can inspect or replay the verification step without vendoring templates into this repository.
 
 > [!TIP]
 Security-header findings are generated only for HTTP `2xx/3xx` responses. On `4xx/5xx` responses, which are common on load balancer and CDN default pages, Flan reports header checks as skipped instead of treating them as header failures.
@@ -434,6 +463,22 @@ If --kube-diff-against is omitted but --kube-inventory-out is set, Flan reuses t
 | `--json` | JSON output |
 | `--jsonl` | JSONL streaming output |
 | `--csv` | CSV output |
+
+### `flan verify` Flags
+
+| Flag | Description |
+|------|-------------|
+| `--input`, `-i` | Path to scan results in JSON or JSONL format; use `-` for stdin |
+| `--json` | Emit the unified verify summary and findings as JSON |
+| `--run` | Run Nuclei against derived HTTP targets and merge results into findings |
+| `--templates` | Comma-separated Nuclei template files or directories |
+| `--template-url` | Comma-separated remote Nuclei template URLs |
+| `--workflows` | Comma-separated Nuclei workflow files or directories |
+| `--workflow-url` | Comma-separated remote Nuclei workflow URLs |
+| `--tags` | Comma-separated Nuclei tags |
+| `--severity` | Comma-separated Nuclei severities |
+| `--rate-limit` | Nuclei requests per second |
+| `--timeout` | Nuclei per-request timeout in seconds |
 
 ## Tests
 
