@@ -518,64 +518,101 @@ func productConfidenceRank(confidence string) int {
 	}
 }
 
+func productResponseAlive(code int) bool {
+	return (code >= 200 && code < 400) || code == 401 || code == 403
+}
+
+func productResponseOK(code int) bool {
+	return code >= 200 && code < 400
+}
+
 func detectDeeperProduct(path string, cr *CrawlResult, headers http.Header, body string, fp *AppFingerprint, productsFound map[string]string) {
+	if cr == nil || cr.StatusCode == 0 || cr.StatusCode == 404 {
+		return
+	}
+
 	server := strings.ToLower(fp.Server)
 	poweredBy := strings.ToLower(fp.PoweredBy)
 	generator := strings.ToLower(fp.Generator)
 	title := strings.ToLower(cr.Title)
 	bodyLower := strings.ToLower(body)
-	statusOK := cr.StatusCode > 0 && cr.StatusCode < 500
+	ct := strings.ToLower(headers.Get("Content-Type"))
+	alive := productResponseAlive(cr.StatusCode)
+	ok := productResponseOK(cr.StatusCode)
 
 	switch {
-	case headers.Get("X-JFrog-Version") != "" || headers.Get("X-Artifactory-Id") != "" || strings.Contains(bodyLower, "artifactory"):
+	case headers.Get("X-JFrog-Version") != "" || headers.Get("X-Artifactory-Id") != "":
 		addProduct(fp, productsFound, "Artifactory", "high")
-	case strings.EqualFold(headers.Get("X-Elastic-Product"), "Elasticsearch") || strings.Contains(bodyLower, "\"cluster_name\"") || path == "/_cat/health" || path == "/_nodes":
+	case alive && strings.Contains(poweredBy, "artifactory"):
+		addProduct(fp, productsFound, "Artifactory", "medium")
+	case alive && strings.Contains(bodyLower, "artifactory") && (strings.Contains(path, "artifactory") || strings.Contains(path, "jfrog")):
+		addProduct(fp, productsFound, "Artifactory", "medium")
+
+	case strings.EqualFold(headers.Get("X-Elastic-Product"), "Elasticsearch"):
 		addProduct(fp, productsFound, "Elasticsearch", "high")
-	case strings.Contains(title, "grafana") || strings.Contains(bodyLower, "grafana") || strings.Contains(path, "/grafana/"):
+	case ok && (path == "/_cat/health" || path == "/_nodes") && (strings.Contains(bodyLower, "\"cluster_name\"") || strings.Contains(bodyLower, "\"tagline\"") || strings.Contains(ct, "json")):
+		addProduct(fp, productsFound, "Elasticsearch", "high")
+	case ok && strings.Contains(bodyLower, "\"cluster_name\"") && strings.Contains(bodyLower, "\"tagline\""):
+		addProduct(fp, productsFound, "Elasticsearch", "high")
+
+	case headers.Get("X-Grafana-Org-Id") != "" || headers.Get("X-Grafana-Device-Id") != "":
 		addProduct(fp, productsFound, "Grafana", "high")
-	case strings.Contains(bodyLower, "hashicorp vault") || strings.Contains(bodyLower, "\"sealed\"") && strings.Contains(path, "/v1/sys/health"):
+	case alive && (strings.Contains(title, "grafana") || strings.Contains(generator, "grafana") ||
+		strings.Contains(bodyLower, "grafana-app") || strings.Contains(bodyLower, "window.grafanabootdata") ||
+		strings.Contains(bodyLower, "grafana_session")):
+		addProduct(fp, productsFound, "Grafana", "high")
+
+	case ok && path == "/v1/sys/health" && (strings.Contains(bodyLower, "hashicorp vault") || strings.Contains(bodyLower, "\"sealed\"")):
 		addProduct(fp, productsFound, "Vault", "high")
-	case strings.Contains(bodyLower, "\"config\"") && strings.Contains(path, "/v1/agent/self") || strings.Contains(bodyLower, "\"datacenter\"") && strings.Contains(bodyLower, "\"revision\""):
+	case ok && strings.Contains(bodyLower, "hashicorp vault"):
+		addProduct(fp, productsFound, "Vault", "high")
+
+	case ok && path == "/v1/agent/self" && strings.Contains(bodyLower, "\"config\"") && (strings.Contains(bodyLower, "\"datacenter\"") || strings.Contains(bodyLower, "\"node_name\"")):
 		addProduct(fp, productsFound, "Consul", "high")
-	case strings.Contains(title, "prometheus") || path == "/-/healthy" || strings.Contains(bodyLower, "prometheus time series collection"):
+	case ok && strings.Contains(bodyLower, "\"datacenter\"") && strings.Contains(bodyLower, "\"revision\"") && strings.Contains(bodyLower, "serf"):
+		addProduct(fp, productsFound, "Consul", "high")
+
+	case ok && path == "/-/healthy" && (strings.Contains(bodyLower, "prometheus") || strings.TrimSpace(bodyLower) == "ok" || strings.Contains(bodyLower, "healthy")):
 		addProduct(fp, productsFound, "Prometheus", "high")
-	case strings.Contains(server, "fortigate") || strings.Contains(title, "fortigate") || strings.Contains(bodyLower, "fortinet"):
+	case ok && path == "/metrics" && (strings.Contains(body, "# HELP") || strings.Contains(body, "# TYPE")):
+		addProduct(fp, productsFound, "Prometheus", "high")
+	case ok && (strings.Contains(title, "prometheus") || strings.Contains(bodyLower, "prometheus time series collection")):
+		addProduct(fp, productsFound, "Prometheus", "high")
+
+	case strings.Contains(server, "fortigate") || (alive && (strings.Contains(title, "fortigate") || strings.Contains(bodyLower, "fortinet"))):
 		addProduct(fp, productsFound, "FortiGate", "medium")
-	case strings.Contains(server, "big-ip") || strings.Contains(title, "big-ip") || strings.Contains(bodyLower, "f5 networks"):
+	case strings.Contains(server, "big-ip") || (alive && (strings.Contains(title, "big-ip") || strings.Contains(bodyLower, "f5 networks"))):
 		addProduct(fp, productsFound, "BigIP", "medium")
-	case strings.Contains(title, "cisco") && strings.Contains(bodyLower, "anyconnect") || strings.Contains(bodyLower, "ssl vpn service") && strings.Contains(bodyLower, "cisco"):
+	case alive && ((strings.Contains(title, "cisco") && strings.Contains(bodyLower, "anyconnect")) || (strings.Contains(bodyLower, "ssl vpn service") && strings.Contains(bodyLower, "cisco"))):
 		addProduct(fp, productsFound, "AnyConnect", "medium")
-	case strings.Contains(title, "teamcity") || headers.Get("TeamCity-Node-Id") != "" || strings.Contains(bodyLower, "teamcity"):
+
+	case headers.Get("TeamCity-Node-Id") != "":
 		addProduct(fp, productsFound, "TeamCity", "high")
-	case path == "/version" && strings.Contains(bodyLower, "etcdserver") || strings.Contains(bodyLower, "etcdcluster"):
+	case alive && (strings.Contains(title, "teamcity") || strings.Contains(generator, "teamcity") || strings.Contains(bodyLower, "teamcity")):
+		addProduct(fp, productsFound, "TeamCity", "high")
+
+	case ok && path == "/version" && (strings.Contains(bodyLower, "etcdserver") || strings.Contains(bodyLower, "etcdcluster")):
 		addProduct(fp, productsFound, "etcd", "high")
-	case path == "/version" && strings.Contains(bodyLower, "\"major\"") && strings.Contains(bodyLower, "\"minor\""):
+	case ok && path == "/version" && strings.Contains(bodyLower, "\"major\"") && strings.Contains(bodyLower, "\"minor\"") && strings.Contains(bodyLower, "\"gitversion\""):
 		addProduct(fp, productsFound, "Kubernetes API Server", "high")
 		addProduct(fp, productsFound, "Kubernetes", "high")
-	case statusOK && (headers.Get("Audit-Id") != "" || headers.Get("X-Kubernetes-Pf-Flowschema-Uid") != "" || headers.Get("X-Kubernetes-Pf-Prioritylevel-Uid") != ""):
+	case alive && (headers.Get("Audit-Id") != "" || headers.Get("X-Kubernetes-Pf-Flowschema-Uid") != "" || headers.Get("X-Kubernetes-Pf-Prioritylevel-Uid") != ""):
 		addProduct(fp, productsFound, "Kubernetes API Server", "high")
 		addProduct(fp, productsFound, "Kubernetes", "medium")
-	case statusOK && (path == "/api" || path == "/apis" || path == "/readyz" || path == "/livez" || path == "/healthz" || path == "/openapi/v2" || path == "/openapi/v3") && strings.Contains(bodyLower, "kubernetes"):
+	case ok && (path == "/api" || path == "/apis" || path == "/readyz" || path == "/livez" || path == "/healthz" || path == "/openapi/v2" || path == "/openapi/v3") && strings.Contains(bodyLower, "kubernetes"):
 		addProduct(fp, productsFound, "Kubernetes API Server", "medium")
 		addProduct(fp, productsFound, "Kubernetes", "medium")
-	case strings.Contains(title, "kubernetes dashboard") || strings.Contains(bodyLower, "kubernetes dashboard"):
+	case alive && (strings.Contains(title, "kubernetes dashboard") || strings.Contains(bodyLower, "kubernetes dashboard")):
 		addProduct(fp, productsFound, "Kubernetes Dashboard", "high")
 		addProduct(fp, productsFound, "Kubernetes", "medium")
-	case (path == "/" || path == "/healthz") && (strings.Contains(bodyLower, "default backend - 404") || strings.Contains(bodyLower, "ingress-nginx")):
+	case ok && (path == "/" || path == "/healthz") && (strings.Contains(bodyLower, "default backend - 404") || strings.Contains(bodyLower, "ingress-nginx")):
 		addProduct(fp, productsFound, "Kubernetes Ingress", "high")
 		addProduct(fp, productsFound, "Kubernetes", "medium")
-	case strings.Contains(generator, "grafana"):
-		addProduct(fp, productsFound, "Grafana", "medium")
-	case strings.Contains(generator, "teamcity"):
-		addProduct(fp, productsFound, "TeamCity", "medium")
-	case strings.Contains(poweredBy, "artifactory"):
-		addProduct(fp, productsFound, "Artifactory", "medium")
-	case path == "/graphql" && (strings.Contains(bodyLower, "graphql") || strings.Contains(strings.ToLower(headers.Get("Content-Type")), "graphql")):
+
+	case ok && (path == "/graphql" || path == "/graphiql") && (strings.Contains(ct, "graphql") || strings.Contains(bodyLower, "__schema") || strings.Contains(bodyLower, "must provide query string") || (strings.Contains(bodyLower, "\"errors\"") && strings.Contains(bodyLower, "graphql"))):
 		addProduct(fp, productsFound, "GraphQL", "high")
-	case strings.Contains(bodyLower, "__schema") || strings.Contains(bodyLower, "must provide query string") || strings.Contains(bodyLower, "graphql"):
-		if path == "/" || path == "/graphql" {
-			addProduct(fp, productsFound, "GraphQL", "medium")
-		}
+	case ok && (path == "/" || path == "/graphql") && (strings.Contains(bodyLower, "__schema") || strings.Contains(bodyLower, "must provide query string")):
+		addProduct(fp, productsFound, "GraphQL", "medium")
 	}
 }
 
