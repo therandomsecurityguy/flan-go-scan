@@ -445,6 +445,11 @@ func main() {
 	if *csvFlag {
 		cfg.Output.Format = "csv"
 	}
+	if set["json"] || set["jsonl"] || set["csv"] {
+		// Explicit format flags stream to stdout so results can be piped
+		// (e.g. `flan -t host --jsonl | flan verify --input - --run`).
+		cfg.Output.Directory = "-"
+	}
 
 	fi, _ := os.Stdout.Stat()
 	isTTY := (fi.Mode() & os.ModeCharDevice) != 0
@@ -1520,9 +1525,7 @@ func printResult(res scanner.ScanResult) {
 	}
 
 	if len(res.Vulnerabilities) > 0 {
-		for _, cve := range res.Vulnerabilities {
-			fmt.Printf("  %s✗  %s%s\n", red, cve, reset)
-		}
+		printCVEs(res)
 	} else if len(res.Metadata) > 0 {
 		fmt.Printf("  %s✓  no known CVEs%s\n", green, reset)
 	}
@@ -1543,6 +1546,70 @@ func printResult(res scanner.ScanResult) {
 	}
 
 	fmt.Println()
+}
+
+// printCVEs shows the top CVEs by severity with short titles and summarizes
+// the rest so a single surface with hundreds of CVEs stays readable.
+func printCVEs(res scanner.ScanResult) {
+	const (
+		red      = "\033[31m"
+		yellow   = "\033[33m"
+		dim      = "\033[2m"
+		boldRed  = "\033[1m\033[31m"
+		reset    = "\033[0m"
+		maxShown = 5
+	)
+
+	shown := res.Vulnerabilities
+	if len(shown) > maxShown {
+		shown = shown[:maxShown]
+	}
+	for _, cve := range shown {
+		sevColor := yellow
+		switch strings.ToUpper(cve.Severity) {
+		case "CRITICAL":
+			sevColor = boldRed
+		case "HIGH":
+			sevColor = red
+		case "LOW":
+			sevColor = dim
+		}
+		badge := ""
+		if cve.Severity != "" {
+			badge = fmt.Sprintf("  %s[%s", sevColor, strings.ToUpper(cve.Severity))
+			if cve.Score > 0 {
+				badge += fmt.Sprintf(" %.1f", cve.Score)
+			}
+			badge += "]" + reset
+		}
+		title := ""
+		if cve.Description != "" {
+			title = "  " + cve.Description
+		}
+		fmt.Printf("  %s✗  %s%s%s  %s%s\n", red, cve.ID, reset, badge, dim, title)
+		fmt.Print(reset)
+	}
+
+	if res.VulnerabilityTotal > len(res.Vulnerabilities) {
+		remaining := res.VulnerabilityTotal - len(res.Vulnerabilities)
+		summary := cveSeveritySummary(res.VulnerabilityCounts)
+		if summary != "" {
+			summary = " — of " + strconv.Itoa(res.VulnerabilityTotal) + " total: " + summary
+		}
+		fmt.Printf("  %s~  +%d more CVEs%s%s\n", dim, remaining, summary, reset)
+	}
+}
+
+// cveSeveritySummary renders a severity distribution like "8 critical, 34 high".
+func cveSeveritySummary(counts map[string]int) string {
+	order := []string{"CRITICAL", "HIGH", "MEDIUM", "LOW"}
+	parts := make([]string, 0, len(order))
+	for _, severity := range order {
+		if n := counts[severity]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", n, strings.ToLower(severity)))
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 func printAnalysis(text string) {
@@ -1991,12 +2058,15 @@ func enrichResultVulnerabilities(ctx context.Context, res *scanner.ScanResult, c
 
 	const (
 		maxCPELookups   = 2
-		cveLookupWindow = 4 * time.Second
+		cveLookupWindow = 10 * time.Second
+		maxStoredCVEs   = 20
 	)
 
 	seenCPEs := make(map[string]struct{})
-	seenCVEs := make(map[string]struct{})
-	var vulns []string
+	seenCVEIDs := make(map[string]struct{})
+	total := 0
+	counts := make(map[string]int)
+	var vulns []scanner.CVE
 
 	for _, cpe := range meta.CPEs {
 		if cpe == "" {
@@ -2011,16 +2081,32 @@ func enrichResultVulnerabilities(ctx context.Context, res *scanner.ScanResult, c
 		seenCPEs[cpe] = struct{}{}
 
 		lookupCtx, cancel := context.WithTimeout(ctx, cveLookupWindow)
-		for _, cve := range cveLookup.Lookup(lookupCtx, cpe) {
-			if _, seen := seenCVEs[cve.ID]; seen {
+		match := cveLookup.Lookup(lookupCtx, cpe)
+		cancel()
+		total += match.Total
+		for severity, n := range match.Counts {
+			counts[severity] += n
+		}
+		for _, cve := range match.CVEs {
+			if _, seen := seenCVEIDs[cve.ID]; seen {
 				continue
 			}
-			seenCVEs[cve.ID] = struct{}{}
-			vulns = append(vulns, cve.ID)
+			seenCVEIDs[cve.ID] = struct{}{}
+			vulns = append(vulns, cve)
 		}
-		cancel()
+	}
+	if len(vulns) == 0 {
+		return
+	}
+	scanner.SortCVEs(vulns)
+	if len(vulns) > maxStoredCVEs {
+		vulns = vulns[:maxStoredCVEs]
 	}
 	res.Vulnerabilities = vulns
+	res.VulnerabilityTotal = total
+	if len(counts) > 0 {
+		res.VulnerabilityCounts = counts
+	}
 }
 
 type tcpScanOptions struct {
@@ -2088,6 +2174,8 @@ func scanTCPPort(
 	if ctx.Err() != nil {
 		return nil, false
 	}
+
+	metadata = scanner.EnrichCPEVersions(metadata, service, version, banner)
 
 	likelyTLS := port == 443 || port == 8443 || port == 4443
 	if fp != nil && fp.TLS {

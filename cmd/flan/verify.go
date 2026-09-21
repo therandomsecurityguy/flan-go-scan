@@ -119,10 +119,18 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 		InputPath: path,
 		Results:   len(results),
 	}
+	// Domain-mode scans emit one result row per (hostname, IP) pair, so the
+	// same surface can appear multiple times; surface listings are deduped
+	// by host, port, and path.
+	seenSurfaces := make(map[string]struct{}, len(results))
 	for _, result := range results {
-		surfaces := verifymodel.SurfacesFromScanResult(result)
-		summary.Surfaces += len(surfaces)
-		for _, surface := range surfaces {
+		for _, surface := range verifymodel.SurfacesFromScanResult(result) {
+			key := fmt.Sprintf("%s|%d|%s", result.Host, result.Port, surface.Path)
+			if _, seen := seenSurfaces[key]; seen {
+				continue
+			}
+			seenSurfaces[key] = struct{}{}
+			summary.Surfaces++
 			summary.SurfaceDetails = append(summary.SurfaceDetails, verifySurfaceSummary{
 				Host:      result.Host,
 				Port:      result.Port,
@@ -190,17 +198,15 @@ func runVerifyCommand(args []string, stdout, stderr io.Writer) error {
 		}
 		fmt.Fprintln(stdout, line)
 	}
-	for _, result := range results {
-		for _, surface := range verifymodel.SurfacesFromScanResult(result) {
-			line := fmt.Sprintf("- %s:%d%s", result.Host, result.Port, surface.Path)
-			if surface.Source != "" {
-				line += " source=" + surface.Source
-			}
-			if result.Service != "" {
-				line += " service=" + result.Service
-			}
-			fmt.Fprintln(stdout, line)
+	for _, surface := range summary.SurfaceDetails {
+		line := fmt.Sprintf("- %s:%d%s", surface.Host, surface.Port, surface.Path)
+		if surface.Source != "" {
+			line += " source=" + surface.Source
 		}
+		if surface.Service != "" {
+			line += " service=" + surface.Service
+		}
+		fmt.Fprintln(stdout, line)
 	}
 	return nil
 }

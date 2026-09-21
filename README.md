@@ -33,7 +33,7 @@ Flan is a Swiss army knife network scanner in Go. Successor to [Flan Scan](https
 - Default deeper product fingerprinting for cloud/admin/data surfaces such as Kubernetes, Grafana, Vault, Elasticsearch, PostgreSQL, Redis, LDAP, SMB, GraphQL, OpenVPN, and IPsec
 - Context-aware rate limiting and TLS inspection — clean shutdown on Ctrl+C
 - Graceful shutdown on SIGINT/SIGTERM
-- AI-powered security analysis via [Together API](https://together.ai) (`Qwen/Qwen3.5-9B`) — brief summary on every scan, detailed report with `--analyze`
+- AI-powered security analysis via [Together API](https://together.ai) (`zai-org/GLM-5.3`) — brief summary on every scan, detailed report with `--analyze`
 - Pretty streaming CLI output with TTY detection (JSONL when piping)
 - Per-run scan metadata report (`scan-metadata-*.json`) for auditability
 - JSON, JSONL (streaming), CSV, and text output

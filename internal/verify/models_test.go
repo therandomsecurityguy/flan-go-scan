@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/therandomsecurityguy/flan-go-scan/internal/scanner"
@@ -94,6 +95,53 @@ func TestSurfacesFromScanResultAddsKubernetesPaths(t *testing.T) {
 	surfaces := SurfacesFromScanResult(result)
 
 	assertSurfacePaths(t, surfaces, []string{"/", "/api", "/apis", "/version"})
+}
+
+func TestSurfacesFromScanResultDropsDeadCrawlEndpoints(t *testing.T) {
+	result := scanner.ScanResult{
+		Host:     "192.0.2.30",
+		Port:     80,
+		Protocol: "tcp",
+		Service:  "http",
+		Endpoints: []scanner.CrawlResult{
+			{Path: "/admin", StatusCode: 404},
+			{Path: "/metrics", StatusCode: 500},
+			{Path: "/dashboard", StatusCode: 0},
+			{Path: "/login", StatusCode: 200},
+			{Path: "/secure", StatusCode: 403},
+			{Path: "/old", StatusCode: 410},
+		},
+	}
+
+	surfaces := SurfacesFromScanResult(result)
+
+	assertSurfacePaths(t, surfaces, []string{"/", "/login", "/secure"})
+}
+
+func TestSurfacesFromScanResultBoundedPerResult(t *testing.T) {
+	endpoints := make([]scanner.CrawlResult, 0, maxSurfacesPerResult+5)
+	for i := 0; i < maxSurfacesPerResult+5; i++ {
+		endpoints = append(endpoints, scanner.CrawlResult{
+			Path:       fmt.Sprintf("/page-%d", i),
+			StatusCode: 200,
+		})
+	}
+	result := scanner.ScanResult{
+		Host:      "192.0.2.31",
+		Port:      80,
+		Protocol:  "tcp",
+		Service:   "http",
+		Endpoints: endpoints,
+	}
+
+	surfaces := SurfacesFromScanResult(result)
+
+	if got, want := len(surfaces), maxSurfacesPerResult; got != want {
+		t.Fatalf("len(surfaces) = %d, want %d", got, want)
+	}
+	if got, want := surfaces[0].Path, "/"; got != want {
+		t.Fatalf("surfaces[0].Path = %q, want %q", got, want)
+	}
 }
 
 func assertStrings(t *testing.T, name string, got, want []string) {

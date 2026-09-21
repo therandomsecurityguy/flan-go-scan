@@ -92,21 +92,21 @@ func (w *ReportWriter) WriteCSV(results []scanner.ScanResult) (err error) {
 			tlsExpired = fmt.Sprintf("%v", res.TLS.Expired)
 			tlsSelfSigned = fmt.Sprintf("%v", res.TLS.SelfSigned)
 		}
-		if err := writer.Write([]string{
-			res.Host,
-			fmt.Sprintf("%d", res.Port),
-			res.Protocol,
-			res.Service,
-			res.Version,
-			res.Banner,
-			tlsEnabled,
-			tlsVersion,
-			tlsSubject,
-			tlsIssuer,
-			tlsExpired,
-			tlsSelfSigned,
-			strings.Join(res.Vulnerabilities, ";"),
-		}); err != nil {
+if err := writer.Write([]string{
+		res.Host,
+		fmt.Sprintf("%d", res.Port),
+		res.Protocol,
+		res.Service,
+		res.Version,
+		res.Banner,
+		tlsEnabled,
+		tlsVersion,
+		tlsSubject,
+		tlsIssuer,
+		tlsExpired,
+		tlsSelfSigned,
+		cveIDs(res.Vulnerabilities),
+	}); err != nil {
 			if filename == "" {
 				return fmt.Errorf("write csv row: %w", err)
 			}
@@ -133,6 +133,18 @@ func (w *ReportWriter) open(ext string) (io.Writer, func() error, string, error)
 		return nil, nil, "", fmt.Errorf("create %s: %w", filename, err)
 	}
 	return file, file.Close, filename, nil
+}
+
+// cveIDs renders a CVE list as a compact semicolon-separated ID string.
+func cveIDs(cves []scanner.CVE) string {
+	if len(cves) == 0 {
+		return ""
+	}
+	ids := make([]string, 0, len(cves))
+	for _, cve := range cves {
+		ids = append(ids, cve.ID)
+	}
+	return strings.Join(ids, ";")
 }
 
 type JSONLWriter struct {

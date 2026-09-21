@@ -42,16 +42,16 @@ func TestRunVerifyCommandJSONSummary(t *testing.T) {
 	if got, want := summary.SurfaceDetails[0].Host, "1.1.1.1"; got != want {
 		t.Fatalf("summary.SurfaceDetails[0].Host = %q, want %q", got, want)
 	}
-	if got, want := summary.SurfaceDetails[0].Path, "/login?redirect=/"; got != want {
+	if got, want := summary.SurfaceDetails[0].Path, "/"; got != want {
 		t.Fatalf("summary.SurfaceDetails[0].Path = %q, want %q", got, want)
 	}
-	if got, want := summary.SurfaceDetails[0].Source, "crawl"; got != want {
+	if got, want := summary.SurfaceDetails[0].Source, "service"; got != want {
 		t.Fatalf("summary.SurfaceDetails[0].Source = %q, want %q", got, want)
 	}
-	if got, want := summary.SurfaceDetails[1].Path, "/"; got != want {
+	if got, want := summary.SurfaceDetails[1].Path, "/login?redirect=/"; got != want {
 		t.Fatalf("summary.SurfaceDetails[1].Path = %q, want %q", got, want)
 	}
-	if got, want := summary.SurfaceDetails[1].Source, "service"; got != want {
+	if got, want := summary.SurfaceDetails[1].Source, "crawl"; got != want {
 		t.Fatalf("summary.SurfaceDetails[1].Source = %q, want %q", got, want)
 	}
 }

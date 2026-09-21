@@ -3,6 +3,7 @@ package scanner
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -333,6 +334,7 @@ func crawlHTTP(ctx context.Context, scheme, ip, hostname string, port int, maxDe
 		defer timer.Stop()
 	}
 
+	rootSignature := ""
 	for head < len(queue) {
 		if ctx.Err() != nil {
 			break
@@ -364,7 +366,11 @@ func crawlHTTP(ctx context.Context, scheme, ip, hostname string, port int, maxDe
 		}
 		results = append(results, *cr)
 
-		if tech, ok := pathTech[e.path]; ok && cr.StatusCode < 404 && !appsFound[tech] {
+		if e.path == "/" {
+			rootSignature = probeSignature(e.path, cr, body)
+		}
+		if tech, ok := pathTech[e.path]; ok && cr.StatusCode < 404 && !appsFound[tech] &&
+			rootSignature != "" && probeSignature(e.path, cr, body) != rootSignature {
 			fp.Apps = append(fp.Apps, tech)
 			appsFound[tech] = true
 		}
@@ -522,6 +528,19 @@ func productResponseAlive(code int) bool {
 	return (code >= 200 && code < 400) || code == 401 || code == 403
 }
 
+// probeSignature identifies a probe response. The requested path is replaced
+// with the root-path marker first so catch-all servers that echo the path back
+// (SPA fallbacks, blanket redirects) produce the same signature as the "/"
+// response and can be told apart from real per-product endpoints.
+func probeSignature(path string, cr *CrawlResult, body string) string {
+	normalized := strings.ToLower(body)
+	if len(path) > 1 {
+		normalized = strings.ReplaceAll(normalized, strings.ToLower(path), "/")
+	}
+	sum := sha256.Sum256([]byte(normalized))
+	return fmt.Sprintf("%d|%s|%s|%x", cr.StatusCode, strings.ToLower(cr.ContentType), strings.ToLower(cr.Title), sum)
+}
+
 func productResponseOK(code int) bool {
 	return code >= 200 && code < 400
 }
@@ -535,7 +554,13 @@ func detectDeeperProduct(path string, cr *CrawlResult, headers http.Header, body
 	poweredBy := strings.ToLower(fp.PoweredBy)
 	generator := strings.ToLower(fp.Generator)
 	title := strings.ToLower(cr.Title)
+	// Guard against catch-all servers that echo the requested path back in
+	// the response body: a redirect page for /-/healthy contains the string
+	// "healthy" and must not count as evidence of Prometheus.
 	bodyLower := strings.ToLower(body)
+	if len(path) > 1 {
+		bodyLower = strings.ReplaceAll(bodyLower, strings.ToLower(path), "")
+	}
 	ct := strings.ToLower(headers.Get("Content-Type"))
 	alive := productResponseAlive(cr.StatusCode)
 	ok := productResponseOK(cr.StatusCode)

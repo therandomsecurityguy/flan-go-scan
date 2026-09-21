@@ -173,3 +173,69 @@ func TestDetectDeeperProduct_EvidenceBasedMatches(t *testing.T) {
 		})
 	}
 }
+
+func TestDetectDeeperProductPathEchoIsNotEvidence(t *testing.T) {
+	// Google-style blanket redirect: the 302 body echoes the requested path.
+	// /-/healthy must not fingerprint as Prometheus and /artifactory/ must not
+	// fingerprint as Artifactory when the only "evidence" is the echoed path.
+	cases := []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "redirect echo of healthy",
+			path: "/-/healthy",
+			body: `<HTML><HEAD><TITLE>302 Moved</TITLE></HEAD><BODY><A HREF="https://dns.google/-/healthy">here</A></BODY></HTML>`,
+		},
+		{
+			name: "redirect echo of artifactory",
+			path: "/artifactory/",
+			body: `<HTML><HEAD><TITLE>302 Moved</TITLE></HEAD><BODY><A HREF="https://dns.google/artifactory/">here</A></BODY></HTML>`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fp := &AppFingerprint{}
+			found := map[string]string{}
+			cr := &CrawlResult{Path: tc.path, StatusCode: 302, ContentType: "text/html"}
+			detectDeeperProduct(tc.path, cr, http.Header{}, tc.body, fp, found)
+			if len(fp.Products) > 0 {
+				t.Fatalf("echoed path must not produce products, got %v", productNames(fp))
+			}
+		})
+	}
+}
+
+func TestDetectDeeperProductRealEvidenceStillMatches(t *testing.T) {
+	fp := &AppFingerprint{}
+	found := map[string]string{}
+	cr := &CrawlResult{Path: "/-/healthy", StatusCode: 200, ContentType: "text/plain"}
+	detectDeeperProduct("/-/healthy", cr, http.Header{}, "Prometheus is Healthy.\n", fp, found)
+	if !hasProduct(fp, "Prometheus") {
+		t.Fatalf("products = %v, want Prometheus", productNames(fp))
+	}
+}
+
+func TestProbeSignatureCollapsesCatchAllResponses(t *testing.T) {
+	rootBody := "<html><body>SPA fallback page</body></html>"
+	probeBody := "<html><body>SPA fallback page</body></html>"
+
+	root := probeSignature("/", &CrawlResult{StatusCode: 200, ContentType: "text/html", Title: "App"}, rootBody)
+	same := probeSignature("/grafana/login", &CrawlResult{StatusCode: 200, ContentType: "text/html", Title: "App"}, probeBody)
+	if root != same {
+		t.Fatalf("identical catch-all responses must share a signature: %q vs %q", root, same)
+	}
+
+	echo := probeSignature("/-/healthy", &CrawlResult{StatusCode: 302, ContentType: "text/html"}, `<A HREF="https://dns.google/-/healthy">x</A>`)
+	echoRoot := probeSignature("/", &CrawlResult{StatusCode: 302, ContentType: "text/html"}, `<A HREF="https://dns.google/">x</A>`)
+	if echo != echoRoot {
+		t.Fatalf("path-echo redirect must collapse to root signature: %q vs %q", echo, echoRoot)
+	}
+
+	distinct := probeSignature("/grafana/login", &CrawlResult{StatusCode: 302, ContentType: "text/html", Title: "Grafana"}, "<html>login redirect</html>")
+	if distinct == root {
+		t.Fatal("distinct responses must not share a signature")
+	}
+}

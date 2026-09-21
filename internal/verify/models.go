@@ -20,29 +20,59 @@ type Surface struct {
 	RedirectTo  string   `json:"redirect_to,omitempty"`
 }
 
+// maxSurfacesPerResult bounds how many HTTP surfaces a single scan result can
+// contribute to nuclei verification runs.
+const maxSurfacesPerResult = 25
+
 func SurfacesFromScanResult(result scanner.ScanResult) []Surface {
-	seen := make(map[string]struct{}, len(result.Endpoints)+4)
-	surfaces := make([]Surface, 0, len(result.Endpoints)+4)
-	addSurface := func(surface Surface) {
+	crawl := make([]Surface, 0, len(result.Endpoints))
+	for _, endpoint := range result.Endpoints {
+		if !crawlEndpointAlive(endpoint) {
+			continue
+		}
+		crawl = append(crawl, SurfaceFromCrawlResult(endpoint))
+	}
+
+	surfaces := make([]Surface, 0, len(crawl)+4)
+	seen := make(map[string]struct{}, len(crawl)+4)
+	addSurface := func(surface Surface) bool {
+		if len(surfaces) >= maxSurfacesPerResult {
+			return false
+		}
 		key := surfaceKey(surface)
 		if _, ok := seen[key]; ok {
-			return
+			return true
 		}
 		seen[key] = struct{}{}
 		surfaces = append(surfaces, surface)
+		return true
 	}
 
-	for _, endpoint := range result.Endpoints {
-		addSurface(SurfaceFromCrawlResult(endpoint))
+	for _, surface := range inferredSurfacesFromScanResult(result, crawl) {
+		if !addSurface(surface) {
+			break
+		}
 	}
-	for _, surface := range inferredSurfacesFromScanResult(result, surfaces) {
-		addSurface(surface)
+	for _, surface := range crawl {
+		if !addSurface(surface) {
+			break
+		}
 	}
 
 	if len(surfaces) == 0 {
 		return nil
 	}
 	return surfaces
+}
+
+// crawlEndpointAlive reports whether a crawled endpoint is worth verifying.
+// Dead probe paths (404/5xx) are dropped; auth gates (401/403) are kept.
+func crawlEndpointAlive(result scanner.CrawlResult) bool {
+	switch result.StatusCode {
+	case 401, 403:
+		return true
+	}
+	return result.StatusCode >= 200 && result.StatusCode < 400
 }
 
 func SurfaceFromCrawlResult(result scanner.CrawlResult) Surface {

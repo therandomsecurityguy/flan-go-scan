@@ -27,7 +27,7 @@ type AnalysisUsage struct {
 	TotalTokens      int64 `json:"total_tokens"`
 }
 
-const TogetherModel = "Qwen/Qwen3.5-9B"
+const TogetherModel = "zai-org/GLM-5.3"
 
 const briefSystemPrompt = `You are a security expert. Return only the final report inside <report>...</report>.
 Do not include reasoning, hidden thoughts, step-by-step analysis, or headings such as "Thinking Process".
@@ -120,7 +120,7 @@ func Analyze(ctx context.Context, results []ScanResult, outputDir string, sc *Sc
 		ResponseFormat: together.ChatCompletionNewParamsResponseFormatUnion{
 			OfText: &together.ChatCompletionNewParamsResponseFormatText{},
 		},
-		MaxTokens:   together.Int(1400),
+		MaxTokens:   together.Int(2400),
 		Temperature: together.Float(0.2),
 	})
 	if err != nil {
@@ -203,7 +203,7 @@ func AnalyzeBrief(ctx context.Context, results []ScanResult, sc *ScanContext) (s
 		ResponseFormat: together.ChatCompletionNewParamsResponseFormatUnion{
 			OfText: &together.ChatCompletionNewParamsResponseFormatText{},
 		},
-		MaxTokens:   together.Int(400),
+		MaxTokens:   together.Int(900),
 		Temperature: together.Float(0.2),
 	})
 	if err != nil {
@@ -261,12 +261,16 @@ func sanitizeModelOutput(raw string) string {
 func extractTaggedReport(text string) string {
 	lower := strings.ToLower(text)
 	start := strings.Index(lower, "<report>")
-	end := strings.Index(lower, "</report>")
-	if start < 0 || end < 0 || end <= start {
+	if start < 0 {
 		return ""
 	}
 	start += len("<report>")
-	return strings.TrimSpace(text[start:end])
+	relEnd := strings.Index(lower[start:], "</report>")
+	if relEnd < 0 {
+		// Closing tag missing (e.g. truncated output): keep what was produced.
+		return strings.TrimSpace(text[start:])
+	}
+	return strings.TrimSpace(text[start : start+relEnd])
 }
 
 func buildSummary(results []ScanResult) string {
@@ -309,7 +313,23 @@ func buildSummary(results []ScanResult) string {
 		}
 
 		if len(r.Vulnerabilities) > 0 {
-			fmt.Fprintf(&b, "  CVEs: %s\n", strings.Join(r.Vulnerabilities, ", "))
+			top := r.Vulnerabilities
+			if len(top) > 8 {
+				top = top[:8]
+			}
+			parts := make([]string, 0, len(top))
+			for _, cve := range top {
+				if cve.Severity != "" && cve.Score > 0 {
+					parts = append(parts, fmt.Sprintf("%s (%s %.1f)", cve.ID, cve.Severity, cve.Score))
+				} else {
+					parts = append(parts, cve.ID)
+				}
+			}
+			line := strings.Join(parts, ", ")
+			if r.VulnerabilityTotal > len(r.Vulnerabilities) {
+				line += fmt.Sprintf(" (+%d more)", r.VulnerabilityTotal-len(r.Vulnerabilities))
+			}
+			fmt.Fprintf(&b, "  CVEs: %s\n", line)
 		}
 
 		if r.PTR != "" {
