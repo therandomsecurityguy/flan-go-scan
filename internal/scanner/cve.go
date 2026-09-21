@@ -138,11 +138,11 @@ func (c *CVELookup) queryNVD(ctx context.Context, cpe string) (CVEMatch, error) 
 	}
 
 	var result struct {
-		TotalResults int `json:"totalResults"`
+		TotalResults    int `json:"totalResults"`
 		Vulnerabilities []struct {
 			CVE struct {
-				ID           string          `json:"id"`
-				Metrics      cveMetrics      `json:"metrics"`
+				ID           string           `json:"id"`
+				Metrics      cveMetrics       `json:"metrics"`
 				Descriptions []cveDescription `json:"descriptions"`
 			} `json:"cve"`
 		} `json:"vulnerabilities"`

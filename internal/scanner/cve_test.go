@@ -7,10 +7,10 @@ import (
 
 func TestCPEVersionIsWildcard(t *testing.T) {
 	cases := map[string]bool{
-		"cpe:2.3:a:apache:http_server:*:*:*:*:*:*:*:*": true,
+		"cpe:2.3:a:apache:http_server:*:*:*:*:*:*:*:*":     true,
 		"cpe:2.3:a:apache:http_server:2.4.7:*:*:*:*:*:*:*": false,
-		"cpe:2.3:a:openbsd:openssh:6.6.1p1":                  false,
-		"cpe:2.3:o:canonical:ubuntu_linux:*":                 true,
+		"cpe:2.3:a:openbsd:openssh:6.6.1p1":                false,
+		"cpe:2.3:o:canonical:ubuntu_linux:*":               true,
 	}
 	for cpe, want := range cases {
 		if got := cpeVersionIsWildcard(cpe); got != want {

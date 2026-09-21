@@ -92,21 +92,21 @@ func (w *ReportWriter) WriteCSV(results []scanner.ScanResult) (err error) {
 			tlsExpired = fmt.Sprintf("%v", res.TLS.Expired)
 			tlsSelfSigned = fmt.Sprintf("%v", res.TLS.SelfSigned)
 		}
-if err := writer.Write([]string{
-		res.Host,
-		fmt.Sprintf("%d", res.Port),
-		res.Protocol,
-		res.Service,
-		res.Version,
-		res.Banner,
-		tlsEnabled,
-		tlsVersion,
-		tlsSubject,
-		tlsIssuer,
-		tlsExpired,
-		tlsSelfSigned,
-		cveIDs(res.Vulnerabilities),
-	}); err != nil {
+		if err := writer.Write([]string{
+			res.Host,
+			fmt.Sprintf("%d", res.Port),
+			res.Protocol,
+			res.Service,
+			res.Version,
+			res.Banner,
+			tlsEnabled,
+			tlsVersion,
+			tlsSubject,
+			tlsIssuer,
+			tlsExpired,
+			tlsSelfSigned,
+			cveIDs(res.Vulnerabilities),
+		}); err != nil {
 			if filename == "" {
 				return fmt.Errorf("write csv row: %w", err)
 			}
